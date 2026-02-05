@@ -11,8 +11,8 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from ai.src.models.segmentation import PersonSegmenter  # noqa: E402
-from ai.src.services.pipeline import PixelateConfig, run_pipeline  # noqa: E402
+from src.models.segmentation import PersonSegmenter  # noqa: E402
+from src.services.pipeline import PixelateConfig, run_pipeline  # noqa: E402
 
 
 def main() -> None:
