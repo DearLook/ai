@@ -1,0 +1,8 @@
+# OS
+.DS_Store
+
+# Env
+.env
+
+# Folder
+/data
