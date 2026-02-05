@@ -1,8 +1,28 @@
-# OS
-.DS_Store
+# data / outputs
+data/
+outputs/
+settings.txt
 
-# Env
+# notebooks cache
+.ipynb_checkpoints/
+
+# python cache
+__pycache__/
+*.pyc
+
+# virtualenv
+.venv/
+venv/
 .env
 
-# Folder
-/data
+# model artifacts
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.h5
+*.pkl
+
+# mac
+.DS_Store
+
