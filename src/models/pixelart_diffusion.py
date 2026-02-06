@@ -77,8 +77,8 @@ def default_diffusion_config() -> PixelArtDiffusionConfig:
         seed=seed,
         post_grid=post_grid,
         post_palette=post_palette,
-        lora_repo=lora_repo or None,
-        lora_weight_name=lora_weight_name or None,
+        lora_repo=lora_repo,
+        lora_weight_name=lora_weight_name,
     )
 
 
@@ -98,8 +98,6 @@ class PixelArtDiffusionStylizer:
                     "pixel-art LoRA repo set but weight name missing: set PIXELART_LORA_WEIGHT_NAME"
                 )
             self.pipe.load_lora_weights(config.lora_repo, weight_name=config.lora_weight_name)
-        else:
-            raise FileNotFoundError(f"pixel-art LoRA not found: {config.lora_path}")
         self.pipe.fuse_lora(lora_scale=config.lora_scale)
         device = "mps" if (config.device == "mps" and torch.backends.mps.is_available()) else "cpu"
         self.pipe.to(device)
