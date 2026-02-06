@@ -6,6 +6,9 @@ from typing import Tuple
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
 
+from src.models.pixelart_model import PixelArtStylizer
+from src.models.pixelart_diffusion import PixelArtDiffusionStylizer
+
 
 @dataclass
 class PixelateConfig:
@@ -147,6 +150,54 @@ def pixel_art_person(image: Image.Image, mask: np.ndarray, config: PixelArtConfi
 
     canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     canvas.paste(pix, (x0, y0), pix)
+    return canvas
+
+
+def pixel_art_person_model(
+    image: Image.Image, mask: np.ndarray, stylizer: PixelArtStylizer
+) -> Image.Image:
+    """Generate pixel-art via model for person region only, returning RGBA with transparent background."""
+    w, h = image.size
+    x0, y0, x1, y1 = _mask_to_bbox(mask)
+    arr = np.array(image)
+    crop = arr[y0:y1, x0:x1]
+    m_crop = mask[y0:y1, x0:x1] >= 0.5
+
+    # Fill background inside crop with median person color to stabilize model input
+    bg = _median_color(crop, m_crop)
+    filled = crop.copy()
+    filled[~m_crop] = bg
+    crop_img = Image.fromarray(filled)
+
+    styled = stylizer.apply(crop_img)
+    styled = apply_alpha(styled.convert("RGB"), m_crop.astype(np.float32))
+
+    canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    canvas.paste(styled, (x0, y0), styled)
+    return canvas
+
+
+def pixel_art_person_diffusion(
+    image: Image.Image, mask: np.ndarray, stylizer: PixelArtDiffusionStylizer
+) -> Image.Image:
+    """Generate pixel-art via diffusion for person region only, returning RGBA with transparent background."""
+    w, h = image.size
+    x0, y0, x1, y1 = _mask_to_bbox(mask)
+    arr = np.array(image)
+    crop = arr[y0:y1, x0:x1]
+    m_crop = mask[y0:y1, x0:x1] >= 0.5
+
+    # Fill background inside crop with median person color to stabilize model input
+    bg = _median_color(crop, m_crop)
+    filled = crop.copy()
+    filled[~m_crop] = bg
+    crop_img = Image.fromarray(filled)
+
+    styled = stylizer.apply(crop_img)
+    styled = apply_alpha(styled.convert("RGB"), m_crop.astype(np.float32))
+
+    canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    canvas.paste(styled, (x0, y0), styled)
     return canvas
 
 

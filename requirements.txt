@@ -5,3 +5,9 @@ pillow
 fastapi
 uvicorn
 python-multipart
+diffusers
+transformers
+accelerate
+safetensors
+pydantic-settings
+peft

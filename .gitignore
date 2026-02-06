@@ -2,6 +2,7 @@
 data/
 outputs/
 settings.txt
+models/
 
 # notebooks cache
 .ipynb_checkpoints/
