@@ -9,9 +9,11 @@ class Settings(BaseSettings):
 
     PIXELART_DIFFUSER_MODEL_ID: str = "stabilityai/stable-diffusion-xl-base-1.0"
     PIXELART_LORA_PATH: str = "models/pixelart/pixel-art-xl-v1.1.safetensors"
+    PIXELART_LORA_REPO: str | None = None
+    PIXELART_LORA_WEIGHT_NAME: str | None = None
     PIXELART_LORA_SCALE: float = 0.6
     PIXELART_PROMPT: str = (
-        "pixel art character, clean outlines, flat shading, 16-bit sprite, simple shapes, limited palette"
+        "pixel art sprite, game asset, transparent background, 16-bit pixel art character, clean outlines, flat shading"
     )
     PIXELART_NEGATIVE_PROMPT: str = (
         "glitch, neon, cyberpunk, text, logo, letters, symbols, high contrast, photorealistic, blurry, noise, artifacts"

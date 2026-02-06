@@ -21,6 +21,7 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
+    poem: false
 
   # (선택) PR에 리뷰 상태/체크 형태로도 표시
   review_status: true
