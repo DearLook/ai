@@ -31,6 +31,8 @@ class PixelArtDiffusionConfig:
     seed: int = 1234
     post_grid: int = 128
     post_palette: int = 32
+    lora_repo: str | None = None
+    lora_weight_name: str | None = None
 
 
 def default_diffusion_config() -> PixelArtDiffusionConfig:
@@ -38,6 +40,8 @@ def default_diffusion_config() -> PixelArtDiffusionConfig:
 
     model_id = settings.PIXELART_DIFFUSER_MODEL_ID
     lora_path = settings.PIXELART_LORA_PATH
+    lora_repo = settings.PIXELART_LORA_REPO
+    lora_weight_name = settings.PIXELART_LORA_WEIGHT_NAME
     prompt = settings.PIXELART_PROMPT
     negative_prompt = settings.PIXELART_NEGATIVE_PROMPT
     steps = settings.PIXELART_STEPS
@@ -73,18 +77,29 @@ def default_diffusion_config() -> PixelArtDiffusionConfig:
         seed=seed,
         post_grid=post_grid,
         post_palette=post_palette,
+        lora_repo=lora_repo or None,
+        lora_weight_name=lora_weight_name or None,
     )
 
 
 class PixelArtDiffusionStylizer:
     def __init__(self, config: PixelArtDiffusionConfig):
-        if not os.path.exists(config.lora_path):
+        if not os.path.exists(config.lora_path) and not config.lora_repo:
             raise FileNotFoundError(f"pixel-art LoRA not found: {config.lora_path}")
         self.config = config
         self.pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
             config.model_id, torch_dtype=config.torch_dtype
         )
-        self.pipe.load_lora_weights(config.lora_path)
+        if os.path.exists(config.lora_path):
+            self.pipe.load_lora_weights(config.lora_path)
+        elif config.lora_repo:
+            if not config.lora_weight_name:
+                raise FileNotFoundError(
+                    "pixel-art LoRA repo set but weight name missing: set PIXELART_LORA_WEIGHT_NAME"
+                )
+            self.pipe.load_lora_weights(config.lora_repo, weight_name=config.lora_weight_name)
+        else:
+            raise FileNotFoundError(f"pixel-art LoRA not found: {config.lora_path}")
         self.pipe.fuse_lora(lora_scale=config.lora_scale)
         device = "mps" if (config.device == "mps" and torch.backends.mps.is_available()) else "cpu"
         self.pipe.to(device)
