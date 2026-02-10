@@ -3,6 +3,7 @@ data/
 outputs/
 settings.txt
 /models/
+AI_README.md
 
 # notebooks cache
 .ipynb_checkpoints/
