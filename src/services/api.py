@@ -1,45 +1,32 @@
-"""FastAPI service for person-only pixelation."""
-
-import io
-import os
-import sys
+import io, os, sys, time
 from typing import Optional
-
-import time
-
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from PIL import Image
 
-# Allow running as a module from repo root
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from src.models.segmentation import PersonSegmenter  # noqa: E402
-from src.models.pixelart_model import PixelArtStylizer, default_model_config  # noqa: E402
-from src.models.pixelart_diffusion import (  # noqa: E402
+from src.models.segmentation import PersonSegmenter
+from src.models.pixelart_diffusion import (
     PixelArtDiffusionStylizer,
     default_diffusion_config,
 )
 from src.config.settings import settings
-from src.services.pipeline import (  # noqa: E402
+from src.services.pipeline import (
     PixelArtConfig,
-    PixelateConfig,
-    apply_alpha,
     composite,
     pixel_art_person,
     pixel_art_person_diffusion,
-    pixel_art_person_model,
-    pixel_art,
     pixelate,
     resize_mask,
 )
 
-app = FastAPI(title="DearLook AI", version="0.1.0")
+app = FastAPI(title="DearLook AI")
 
 _segmenter: Optional[PersonSegmenter] = None
-_stylizer: Optional[PixelArtStylizer] = None
 _diffusion_stylizer: Optional[PixelArtDiffusionStylizer] = None
 
 
@@ -48,14 +35,6 @@ def get_segmenter() -> PersonSegmenter:
     if _segmenter is None:
         _segmenter = PersonSegmenter()
     return _segmenter
-
-
-def get_stylizer() -> PixelArtStylizer:
-    global _stylizer
-    if _stylizer is None:
-        _stylizer = PixelArtStylizer(default_model_config())
-    return _stylizer
-
 
 def get_diffusion_stylizer() -> PixelArtDiffusionStylizer:
     global _diffusion_stylizer
@@ -80,17 +59,14 @@ async def pixelate_person(
     background: str = Form("transparent"),
 ):
     start = time.time()
-    # Read image
     content = await file.read()
     image = Image.open(io.BytesIO(content)).convert("RGB")
-
-    # Predict person mask
     segmenter = get_segmenter()
     mask = segmenter.predict_mask(image)
     mask = resize_mask(mask, image.size)
-
     style = style.lower().strip()
     mode_used = "mosaic"
+
     if style == "mosaic":
         pix = pixelate(image, block)
         out = composite(image, pix, mask)
@@ -116,12 +92,13 @@ async def pixelate_person(
             out = base
         else:
             out = pix
+    
     elif style in ("model", "pixelart-model", "stylized"):
         mode_used = "model"
         try:
             stylizer = get_diffusion_stylizer()
             pix = pixel_art_person_diffusion(image, mask, stylizer)
-        except Exception as exc:  # surface model issues clearly
+        except Exception as exc:
             raise HTTPException(status_code=500, detail=f"diffusion_failed: {exc}") from exc
         if background == "original":
             base = image.convert("RGBA")
@@ -129,10 +106,10 @@ async def pixelate_person(
             out = base
         else:
             out = pix
+    
     else:
         raise HTTPException(status_code=400, detail="style must be one of: mosaic, pixelart, model")
 
-    # Return PNG
     buf = io.BytesIO()
     out.save(buf, format="PNG")
     elapsed_ms = int((time.time() - start) * 1000)
@@ -146,4 +123,5 @@ async def pixelate_person(
         "X-Lora-Scale": str(getattr(settings, "PIXELART_LORA_SCALE", 1.0)),
         "X-Elapsed-Ms": str(elapsed_ms),
     }
+    
     return Response(content=buf.getvalue(), media_type="image/png", headers=headers)

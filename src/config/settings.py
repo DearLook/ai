@@ -6,29 +6,26 @@ class Settings(BaseSettings):
 
     PIXELART_DEVICE: str = "cpu"
     PIXELART_DTYPE: str = "fp32"
-
     PIXELART_DIFFUSER_MODEL_ID: str = "stabilityai/stable-diffusion-xl-base-1.0"
+    PIXELART_DIFFUSER_PATH: str | None = "models/base/sdxl-base-1.0"
+    PIXELART_USE_LORA: bool = True
     PIXELART_LORA_PATH: str = "models/pixelart/pixel-art-xl-v1.1.safetensors"
-    PIXELART_LORA_REPO: str | None = None
-    PIXELART_LORA_WEIGHT_NAME: str | None = None
-    PIXELART_LORA_SCALE: float = 0.6
+    PIXELART_LORA_SCALE: float = 0.38
     PIXELART_PROMPT: str = (
-        "pixel art sprite, game asset, transparent background, 16-bit pixel art character, clean outlines, flat shading"
+        "full-body pixel art character sprite, cute style, clean line art, clear facial features, natural colors, simple shading, plain outfit details"
     )
     PIXELART_NEGATIVE_PROMPT: str = (
-        "glitch, neon, cyberpunk, text, logo, letters, symbols, high contrast, photorealistic, blurry, noise, artifacts"
+        "glitch, neon, cyberpunk, text, logo, letters, symbols, photorealistic, blurry, noise, artifacts, dark, underexposed, muddy colors, low saturation, distorted body, malformed face, armor, military uniform, red-blue hair"
     )
-    PIXELART_STEPS: int = 20
-    PIXELART_STRENGTH: float = 0.4
-    PIXELART_GUIDANCE: float = 4.5
+    PIXELART_STEPS: int = 24
+    PIXELART_STRENGTH: float = 0.34
+    PIXELART_GUIDANCE: float = 5.6
     PIXELART_MAX_SIZE: int = 512
     PIXELART_SEED: int = 1234
-    PIXELART_POST_GRID: int = 128
-    PIXELART_POST_PALETTE: int = 32
-
-    PIXELART_MODEL_PATH: str = "models/pixelart/pixelart.ts"
-    PIXELART_MODEL_INPUT: int | None = None
-    PIXELART_MODEL_NORMALIZE: bool = False
-
+    PIXELART_POST_GRID: int = 224
+    PIXELART_POST_PALETTE: int = 72
+    PIXELART_POST_SATURATION: float = 1.08
+    PIXELART_POST_CONTRAST: float = 1.04
+    PIXELART_POST_BRIGHTNESS: float = 1.03
 
 settings = Settings()

@@ -1,18 +1,15 @@
-"""CLI inference: image -> person mask -> pixelated PNG."""
-
 import argparse
 import os
 import sys
 
 from PIL import Image
 
-# Allow running as a script from repo root
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from src.models.segmentation import PersonSegmenter  # noqa: E402
-from src.services.pipeline import PixelateConfig, run_pipeline  # noqa: E402
+from src.models.segmentation import PersonSegmenter
+from src.services.pipeline import PixelateConfig, run_pipeline
 
 
 def main() -> None:

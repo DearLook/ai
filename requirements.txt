@@ -10,4 +10,5 @@ transformers
 accelerate
 safetensors
 pydantic-settings
+huggingface_hub
 peft
