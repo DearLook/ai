@@ -93,12 +93,6 @@ class PixelArtDiffusionStylizer:
         self.pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
             config.model_id, torch_dtype=config.torch_dtype
         )
-        if config.use_lora:
-            if os.path.exists(config.lora_path):
-                self.pipe.load_lora_weights(config.lora_path)
-            else:
-                raise FileNotFoundError(f"pixel-art LoRA not found: {config.lora_path}")
-            self.pipe.fuse_lora(lora_scale=config.lora_scale)
         device = "mps" if (config.device == "mps" and torch.backends.mps.is_available()) else "cpu"
         self.pipe.to(device)
         self.pipe.enable_attention_slicing()
