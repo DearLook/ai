@@ -1,12 +1,9 @@
-"""Pixel-art stylization via Stable Diffusion img2img + LoRA."""
-
 from __future__ import annotations
 
-import os
+import os, torch
 from dataclasses import dataclass
 
-import torch
-# Prevent transformers from importing TF/JAX stacks in this CPU-only setup
+
 os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
 os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
 
@@ -67,7 +64,7 @@ def default_diffusion_config() -> PixelArtDiffusionConfig:
         torch_dtype = torch.float32
 
     return PixelArtDiffusionConfig(
-        model_id=model_path or model_id,
+        model_id=model_path if (model_path and os.path.exists(model_path)) else model_id,
         lora_path=lora_path,
         prompt=prompt,
         negative_prompt=negative_prompt,
@@ -104,10 +101,8 @@ class PixelArtDiffusionStylizer:
             self.pipe.fuse_lora(lora_scale=config.lora_scale)
         device = "mps" if (config.device == "mps" and torch.backends.mps.is_available()) else "cpu"
         self.pipe.to(device)
-        # Memory helpers
         self.pipe.enable_attention_slicing()
         self.pipe.vae.enable_slicing()
-        # Avoid NaNs on MPS by keeping VAE in fp32
         self.pipe.vae.to(torch.float32)
 
     def _resize_for_pipe(self, image: Image.Image) -> Image.Image:
@@ -133,13 +128,11 @@ class PixelArtDiffusionStylizer:
                 strength=self.config.strength,
                 generator=generator,
             ).images[0]
-        # Match original size (pixel-ish)
         out = self._post_pixelize(out, image.size)
         return out
 
     def _post_pixelize(self, image: Image.Image, target_size: tuple[int, int]) -> Image.Image:
         w, h = target_size
-        # Downscale to grid, quantize palette, then upscale to crisp pixels
         if self.config.post_grid and self.config.post_grid > 1:
             if w >= h:
                 new_w = self.config.post_grid

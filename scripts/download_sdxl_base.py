@@ -1,5 +1,3 @@
-"""Download SDXL base model into models/base/sdxl-base-1.0."""
-
 import os
 from huggingface_hub import snapshot_download
 

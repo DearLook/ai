@@ -6,10 +6,7 @@ class Settings(BaseSettings):
 
     PIXELART_DEVICE: str = "cpu"
     PIXELART_DTYPE: str = "fp32"
-
-    # Base SDXL model id (used when local snapshot path does not exist)
     PIXELART_DIFFUSER_MODEL_ID: str = "stabilityai/stable-diffusion-xl-base-1.0"
-    # Local snapshot path downloaded under models/base/
     PIXELART_DIFFUSER_PATH: str | None = "models/base/sdxl-base-1.0"
     PIXELART_USE_LORA: bool = True
     PIXELART_LORA_PATH: str = "models/pixelart/pixel-art-xl-v1.1.safetensors"
@@ -30,6 +27,5 @@ class Settings(BaseSettings):
     PIXELART_POST_SATURATION: float = 1.08
     PIXELART_POST_CONTRAST: float = 1.04
     PIXELART_POST_BRIGHTNESS: float = 1.03
-
 
 settings = Settings()
