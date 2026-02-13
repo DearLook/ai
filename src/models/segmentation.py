@@ -2,11 +2,9 @@
 
 from typing import Optional
 
-import os
 import numpy as np
 import torch
 from PIL import Image
-from torchvision import transforms
 from torchvision.models.segmentation import (
     DeepLabV3_MobileNet_V3_Large_Weights,
     deeplabv3_mobilenet_v3_large,

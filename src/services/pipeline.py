@@ -6,7 +6,6 @@ from typing import Tuple
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
 
-from src.models.pixelart_model import PixelArtStylizer
 from src.models.pixelart_diffusion import PixelArtDiffusionStylizer
 
 
@@ -131,6 +130,14 @@ def _median_color(arr: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return np.median(arr[mask], axis=0).astype(np.uint8)
 
 
+def _light_neutral_color(arr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Use a brighter neutral fill to prevent dark background bleed into diffusion input."""
+    med = _median_color(arr, mask).astype(np.float32)
+    neutral = np.array([220.0, 220.0, 220.0], dtype=np.float32)
+    mixed = 0.35 * med + 0.65 * neutral
+    return np.clip(mixed, 0, 255).astype(np.uint8)
+
+
 def pixel_art_person(image: Image.Image, mask: np.ndarray, config: PixelArtConfig) -> Image.Image:
     """Generate pixel-art for person region only, returning RGBA with transparent background."""
     w, h = image.size
@@ -153,30 +160,6 @@ def pixel_art_person(image: Image.Image, mask: np.ndarray, config: PixelArtConfi
     return canvas
 
 
-def pixel_art_person_model(
-    image: Image.Image, mask: np.ndarray, stylizer: PixelArtStylizer
-) -> Image.Image:
-    """Generate pixel-art via model for person region only, returning RGBA with transparent background."""
-    w, h = image.size
-    x0, y0, x1, y1 = _mask_to_bbox(mask)
-    arr = np.array(image)
-    crop = arr[y0:y1, x0:x1]
-    m_crop = mask[y0:y1, x0:x1] >= 0.5
-
-    # Fill background inside crop with median person color to stabilize model input
-    bg = _median_color(crop, m_crop)
-    filled = crop.copy()
-    filled[~m_crop] = bg
-    crop_img = Image.fromarray(filled)
-
-    styled = stylizer.apply(crop_img)
-    styled = apply_alpha(styled.convert("RGB"), m_crop.astype(np.float32))
-
-    canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    canvas.paste(styled, (x0, y0), styled)
-    return canvas
-
-
 def pixel_art_person_diffusion(
     image: Image.Image, mask: np.ndarray, stylizer: PixelArtDiffusionStylizer
 ) -> Image.Image:
@@ -187,8 +170,8 @@ def pixel_art_person_diffusion(
     crop = arr[y0:y1, x0:x1]
     m_crop = mask[y0:y1, x0:x1] >= 0.5
 
-    # Fill background inside crop with median person color to stabilize model input
-    bg = _median_color(crop, m_crop)
+    # Use bright neutral fill to avoid muddy/dark generation from removed background
+    bg = _light_neutral_color(crop, m_crop)
     filled = crop.copy()
     filled[~m_crop] = bg
     crop_img = Image.fromarray(filled)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 # Prevent transformers from importing TF/JAX stacks in this CPU-only setup
@@ -12,7 +11,7 @@ os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
 os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
 
 from diffusers import StableDiffusionXLImg2ImgPipeline
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 
 @dataclass
@@ -31,17 +30,19 @@ class PixelArtDiffusionConfig:
     seed: int = 1234
     post_grid: int = 128
     post_palette: int = 32
-    lora_repo: str | None = None
-    lora_weight_name: str | None = None
+    post_saturation: float = 1.0
+    post_contrast: float = 1.0
+    post_brightness: float = 1.0
+    use_lora: bool = True
 
 
 def default_diffusion_config() -> PixelArtDiffusionConfig:
     from src.config.settings import settings
 
     model_id = settings.PIXELART_DIFFUSER_MODEL_ID
+    model_path = settings.PIXELART_DIFFUSER_PATH
     lora_path = settings.PIXELART_LORA_PATH
-    lora_repo = settings.PIXELART_LORA_REPO
-    lora_weight_name = settings.PIXELART_LORA_WEIGHT_NAME
+    use_lora = settings.PIXELART_USE_LORA
     prompt = settings.PIXELART_PROMPT
     negative_prompt = settings.PIXELART_NEGATIVE_PROMPT
     steps = settings.PIXELART_STEPS
@@ -52,6 +53,9 @@ def default_diffusion_config() -> PixelArtDiffusionConfig:
     seed = settings.PIXELART_SEED
     post_grid = settings.PIXELART_POST_GRID
     post_palette = settings.PIXELART_POST_PALETTE
+    post_saturation = settings.PIXELART_POST_SATURATION
+    post_contrast = settings.PIXELART_POST_CONTRAST
+    post_brightness = settings.PIXELART_POST_BRIGHTNESS
 
     device = settings.PIXELART_DEVICE.lower()
     dtype_env = settings.PIXELART_DTYPE.lower()
@@ -63,7 +67,7 @@ def default_diffusion_config() -> PixelArtDiffusionConfig:
         torch_dtype = torch.float32
 
     return PixelArtDiffusionConfig(
-        model_id=model_id,
+        model_id=model_path or model_id,
         lora_path=lora_path,
         prompt=prompt,
         negative_prompt=negative_prompt,
@@ -77,28 +81,27 @@ def default_diffusion_config() -> PixelArtDiffusionConfig:
         seed=seed,
         post_grid=post_grid,
         post_palette=post_palette,
-        lora_repo=lora_repo,
-        lora_weight_name=lora_weight_name,
+        post_saturation=post_saturation,
+        post_contrast=post_contrast,
+        post_brightness=post_brightness,
+        use_lora=use_lora,
     )
 
 
 class PixelArtDiffusionStylizer:
     def __init__(self, config: PixelArtDiffusionConfig):
-        if not os.path.exists(config.lora_path) and not config.lora_repo:
+        if config.use_lora and not os.path.exists(config.lora_path):
             raise FileNotFoundError(f"pixel-art LoRA not found: {config.lora_path}")
         self.config = config
         self.pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
             config.model_id, torch_dtype=config.torch_dtype
         )
-        if os.path.exists(config.lora_path):
-            self.pipe.load_lora_weights(config.lora_path)
-        elif config.lora_repo:
-            if not config.lora_weight_name:
-                raise FileNotFoundError(
-                    "pixel-art LoRA repo set but weight name missing: set PIXELART_LORA_WEIGHT_NAME"
-                )
-            self.pipe.load_lora_weights(config.lora_repo, weight_name=config.lora_weight_name)
-        self.pipe.fuse_lora(lora_scale=config.lora_scale)
+        if config.use_lora:
+            if os.path.exists(config.lora_path):
+                self.pipe.load_lora_weights(config.lora_path)
+            else:
+                raise FileNotFoundError(f"pixel-art LoRA not found: {config.lora_path}")
+            self.pipe.fuse_lora(lora_scale=config.lora_scale)
         device = "mps" if (config.device == "mps" and torch.backends.mps.is_available()) else "cpu"
         self.pipe.to(device)
         # Memory helpers
@@ -147,4 +150,10 @@ class PixelArtDiffusionStylizer:
             image = image.resize((new_w, new_h), Image.BOX)
         if self.config.post_palette and self.config.post_palette > 2:
             image = image.convert("P", palette=Image.ADAPTIVE, colors=self.config.post_palette).convert("RGB")
+        if self.config.post_saturation != 1.0:
+            image = ImageEnhance.Color(image).enhance(self.config.post_saturation)
+        if self.config.post_contrast != 1.0:
+            image = ImageEnhance.Contrast(image).enhance(self.config.post_contrast)
+        if self.config.post_brightness != 1.0:
+            image = ImageEnhance.Brightness(image).enhance(self.config.post_brightness)
         return image.resize((w, h), Image.NEAREST)

@@ -17,7 +17,6 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.models.segmentation import PersonSegmenter  # noqa: E402
-from src.models.pixelart_model import PixelArtStylizer, default_model_config  # noqa: E402
 from src.models.pixelart_diffusion import (  # noqa: E402
     PixelArtDiffusionStylizer,
     default_diffusion_config,
@@ -26,12 +25,9 @@ from src.config.settings import settings
 from src.services.pipeline import (  # noqa: E402
     PixelArtConfig,
     PixelateConfig,
-    apply_alpha,
     composite,
     pixel_art_person,
     pixel_art_person_diffusion,
-    pixel_art_person_model,
-    pixel_art,
     pixelate,
     resize_mask,
 )
@@ -39,7 +35,6 @@ from src.services.pipeline import (  # noqa: E402
 app = FastAPI(title="DearLook AI", version="0.1.0")
 
 _segmenter: Optional[PersonSegmenter] = None
-_stylizer: Optional[PixelArtStylizer] = None
 _diffusion_stylizer: Optional[PixelArtDiffusionStylizer] = None
 
 
@@ -48,13 +43,6 @@ def get_segmenter() -> PersonSegmenter:
     if _segmenter is None:
         _segmenter = PersonSegmenter()
     return _segmenter
-
-
-def get_stylizer() -> PixelArtStylizer:
-    global _stylizer
-    if _stylizer is None:
-        _stylizer = PixelArtStylizer(default_model_config())
-    return _stylizer
 
 
 def get_diffusion_stylizer() -> PixelArtDiffusionStylizer:
