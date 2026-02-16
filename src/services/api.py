@@ -1,5 +1,5 @@
 import io, os, sys, time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 import asyncio, uuid
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
@@ -49,6 +49,89 @@ def _job_public(job: Dict[str, Any]) -> Dict[str, Any]:
         "meta": job.get("meta", {}),
     }
 
+async def _run_blocking(fn, *args, **kwargs):
+    if hasattr(asyncio, "to_thread"):
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
+
+
+def _pixelate_sync(content: bytes, params: Dict[str, Any]) -> Tuple[bytes, Dict[str, Any]]:
+    image = Image.open(io.BytesIO(content)).convert("RGB")
+    segmenter = get_segmenter()
+    mask = segmenter.predict_mask(image)
+    mask = resize_mask(mask, image.size)
+
+    style = str(params.get("style", "pixelart")).lower().strip()
+    block = int(params.get("block", 12))
+    long_edge = int(params.get("long_edge", 160))
+    palette = int(params.get("palette", 48))
+    dither = bool(params.get("dither", False))
+    outline = bool(params.get("outline", False))
+    edge_threshold = float(params.get("edge_threshold", 0.12))
+    smooth = int(params.get("smooth", 3))
+    color = float(params.get("color", 1.15))
+    contrast = float(params.get("contrast", 1.1))
+    background = str(params.get("background", "transparent"))
+
+    mode_used = "mosaic"
+
+    if style == "mosaic":
+        pix = pixelate(image, block)
+        out = composite(image, pix, mask)
+
+    elif style in ("pixelart", "pixel-art"):
+        mode_used = "pixelart"
+        pix = pixel_art_person(
+            image,
+            mask,
+            PixelArtConfig(
+                target_long_edge=long_edge,
+                palette_size=palette,
+                dither=dither,
+                outline=outline,
+                edge_threshold=edge_threshold,
+                pre_smooth=smooth,
+                color_boost=color,
+                contrast_boost=contrast,
+            ),
+        )
+        if background == "original":
+            base = image.convert("RGBA")
+            base.paste(pix, (0, 0), pix)
+            out = base
+        else:
+            out = pix
+
+    elif style in ("model", "pixelart-model", "stylized"):
+        mode_used = "model"
+        stylizer = get_diffusion_stylizer()
+        pix = pixel_art_person_diffusion(image, mask, stylizer)
+        if background == "original":
+            base = image.convert("RGBA")
+            base.paste(pix, (0, 0), pix)
+            out = base
+        else:
+            out = pix
+
+    else:
+        raise ValueError("style must be one of: mosaic, pixelart, model")
+
+    buf = io.BytesIO()
+    out.save(buf, format="PNG")
+
+    meta = {
+        "style_input": style,
+        "mode_used": mode_used,
+        "device": settings.PIXELART_DEVICE,
+        "dtype": settings.PIXELART_DTYPE,
+        "model_id": settings.PIXELART_DIFFUSER_MODEL_ID,
+        "lora_path": settings.PIXELART_LORA_PATH,
+        "lora_scale": str(getattr(settings, "PIXELART_LORA_SCALE", 1.0)),
+    }
+    return buf.getvalue(), meta
+
 
 def get_segmenter() -> PersonSegmenter:
     global _segmenter
@@ -85,24 +168,7 @@ async def _run_pixelate_job(job_id: str, content: bytes, params: Dict[str, Any])
                     j["updated_ms"] = _now_ms()
             return
 
-        image = Image.open(io.BytesIO(content)).convert("RGB")
-        segmenter = get_segmenter()
-        mask = segmenter.predict_mask(image)
-        mask = resize_mask(mask, image.size)
-
-        style = str(params.get("style", "pixelart")).lower().strip()
-        block = int(params.get("block", 12))
-        long_edge = int(params.get("long_edge", 160))
-        palette = int(params.get("palette", 48))
-        dither = bool(params.get("dither", False))
-        outline = bool(params.get("outline", False))
-        edge_threshold = float(params.get("edge_threshold", 0.12))
-        smooth = int(params.get("smooth", 3))
-        color = float(params.get("color", 1.15))
-        contrast = float(params.get("contrast", 1.1))
-        background = str(params.get("background", "transparent"))
-
-        mode_used = "mosaic"
+        png_bytes, meta = await _run_blocking(_pixelate_sync, content, params)
 
         if _is_cancelled():
             async with _JOBS_LOCK:
@@ -111,74 +177,14 @@ async def _run_pixelate_job(job_id: str, content: bytes, params: Dict[str, Any])
                     j["status"] = "CANCELLED"
                     j["updated_ms"] = _now_ms()
             return
-
-        if style == "mosaic":
-            pix = pixelate(image, block)
-            out = composite(image, pix, mask)
-
-        elif style in ("pixelart", "pixel-art"):
-            mode_used = "pixelart"
-            pix = pixel_art_person(
-                image,
-                mask,
-                PixelArtConfig(
-                    target_long_edge=long_edge,
-                    palette_size=palette,
-                    dither=dither,
-                    outline=outline,
-                    edge_threshold=edge_threshold,
-                    pre_smooth=smooth,
-                    color_boost=color,
-                    contrast_boost=contrast,
-                ),
-            )
-            if background == "original":
-                base = image.convert("RGBA")
-                base.paste(pix, (0, 0), pix)
-                out = base
-            else:
-                out = pix
-
-        elif style in ("model", "pixelart-model", "stylized"):
-            mode_used = "model"
-            stylizer = get_diffusion_stylizer()
-            pix = pixel_art_person_diffusion(image, mask, stylizer)
-            if background == "original":
-                base = image.convert("RGBA")
-                base.paste(pix, (0, 0), pix)
-                out = base
-            else:
-                out = pix
-
-        else:
-            raise ValueError("style must be one of: mosaic, pixelart, model")
-
-        if _is_cancelled():
-            async with _JOBS_LOCK:
-                j = _JOBS.get(job_id)
-                if j:
-                    j["status"] = "CANCELLED"
-                    j["updated_ms"] = _now_ms()
-            return
-
-        buf = io.BytesIO()
-        out.save(buf, format="PNG")
 
         async with _JOBS_LOCK:
             j = _JOBS.get(job_id)
             if j:
                 j["status"] = "SUCCEEDED"
                 j["updated_ms"] = _now_ms()
-                j["result_png"] = buf.getvalue()
-                j["meta"] = {
-                    "style_input": style,
-                    "mode_used": mode_used,
-                    "device": settings.PIXELART_DEVICE,
-                    "dtype": settings.PIXELART_DTYPE,
-                    "model_id": settings.PIXELART_DIFFUSER_MODEL_ID,
-                    "lora_path": settings.PIXELART_LORA_PATH,
-                    "lora_scale": str(getattr(settings, "PIXELART_LORA_SCALE", 1.0)),
-                }
+                j["result_png"] = png_bytes
+                j["meta"] = meta
 
     except Exception as exc:
         async with _JOBS_LOCK:
