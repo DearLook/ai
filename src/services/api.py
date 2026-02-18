@@ -33,6 +33,7 @@ _diffusion_stylizer: Optional[PixelArtDiffusionStylizer] = None
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _JOBS_LOCK = asyncio.Lock()
+_TASKS: set[asyncio.Task] = set()
 
 
 def _now_ms() -> int:
@@ -48,6 +49,7 @@ def _job_public(job: Dict[str, Any]) -> Dict[str, Any]:
         "error": job.get("error"),
         "meta": job.get("meta", {}),
     }
+
 
 async def _run_blocking(fn, *args, **kwargs):
     if hasattr(asyncio, "to_thread"):
@@ -155,12 +157,13 @@ async def _run_pixelate_job(job_id: str, content: bytes, params: Dict[str, Any])
         job["status"] = "RUNNING"
         job["updated_ms"] = _now_ms()
 
-    def _is_cancelled() -> bool:
-        j = _JOBS.get(job_id)
-        return bool(j and j.get("cancelled"))
+    async def _is_cancelled_locked() -> bool:
+        async with _JOBS_LOCK:
+            j = _JOBS.get(job_id)
+            return bool(j and j.get("cancelled"))
 
     try:
-        if _is_cancelled():
+        if await _is_cancelled_locked():
             async with _JOBS_LOCK:
                 j = _JOBS.get(job_id)
                 if j:
@@ -170,7 +173,7 @@ async def _run_pixelate_job(job_id: str, content: bytes, params: Dict[str, Any])
 
         png_bytes, meta = await _run_blocking(_pixelate_sync, content, params)
 
-        if _is_cancelled():
+        if await _is_cancelled_locked():
             async with _JOBS_LOCK:
                 j = _JOBS.get(job_id)
                 if j:
@@ -181,6 +184,10 @@ async def _run_pixelate_job(job_id: str, content: bytes, params: Dict[str, Any])
         async with _JOBS_LOCK:
             j = _JOBS.get(job_id)
             if j:
+                if j.get("cancelled"):
+                    j["status"] = "CANCELLED"
+                    j["updated_ms"] = _now_ms()
+                    return
                 j["status"] = "SUCCEEDED"
                 j["updated_ms"] = _now_ms()
                 j["result_png"] = png_bytes
@@ -196,6 +203,7 @@ async def _run_pixelate_job(job_id: str, content: bytes, params: Dict[str, Any])
                     j["status"] = "FAILED"
                     j["error"] = f"{type(exc).__name__}: {exc}"
                 j["updated_ms"] = _now_ms()
+        return
 
 
 @app.post("/pixelate/async")
@@ -217,6 +225,10 @@ async def pixelate_person_async(
     if await request.is_disconnected():
         raise HTTPException(status_code=499, detail="client_disconnected")
 
+    style_norm = style.lower().strip()
+    if style_norm not in ("mosaic", "pixelart", "pixel-art", "model", "pixelart-model", "stylized"):
+        raise HTTPException(status_code=400, detail="style must be one of: mosaic, pixelart, model")
+
     content = await file.read()
     job_id = uuid.uuid4().hex
 
@@ -235,7 +247,7 @@ async def pixelate_person_async(
         _JOBS[job_id] = job
 
     params = {
-        "style": style,
+        "style": style_norm,
         "block": block,
         "long_edge": long_edge,
         "palette": palette,
@@ -248,7 +260,14 @@ async def pixelate_person_async(
         "background": background,
     }
 
-    asyncio.create_task(_run_pixelate_job(job_id, content, params))
+    task = asyncio.create_task(_run_pixelate_job(job_id, content, params))
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
+
+    async with _JOBS_LOCK:
+        j = _JOBS.get(job_id)
+        if j is not None:
+            j["task"] = task
 
     return {"job_id": job_id, "status": "QUEUED"}
 
@@ -268,11 +287,12 @@ async def cancel_job(job_id: str):
         if not job:
             raise HTTPException(status_code=404, detail="job_not_found")
 
-        job["cancelled"] = True
-        job["updated_ms"] = _now_ms()
-
         if job["status"] in ("QUEUED", "RUNNING"):
+            job["cancelled"] = True
             job["status"] = "CANCELLED"
+            job["updated_ms"] = _now_ms()
+        else:
+            raise HTTPException(status_code=409, detail="job_already_finished")
 
         return _job_public(job)
 
