@@ -3,11 +3,13 @@
 Last updated: 2026-02-24
 
 ## Purpose
+
 This document tracks model provenance, license, version, and commercial-use status for deployment review.
 
 ## Model Inventory
 
 ### 1) Base diffusion model
+
 - Component: `SDXL base (img2img backbone)`
 - Local path: `models/base/sdxl-base-1.0`
 - Upstream: `stabilityai/stable-diffusion-xl-base-1.0`
@@ -19,6 +21,7 @@ This document tracks model provenance, license, version, and commercial-use stat
   - Keep policy-compliance checks in product/legal review.
 
 ### 2) Pixel style LoRA (optional)
+
 - Component: `Pixel-art LoRA`
 - Local path: `models/pixelart/pixel-art-xl-v1.1.safetensors`
 - Upstream/source: `CivitAI model 120096 (Pixel Art XL), creator: NeriJS`
@@ -34,18 +37,21 @@ This document tracks model provenance, license, version, and commercial-use stat
   - Internal safetensors metadata indicates a training output name (`pixelbuildings128-v2`) and does not include an explicit commercial redistribution license in-file.
 
 ## Runtime License Guard
+
 - Setting: `LICENSE_STRICT_MODE` (default: `true`)
 - Behavior:
   - If strict mode is enabled and LoRA metadata/approval/commercial checks fail, API runs `base-only` mode (LoRA off).
   - In base-only mode, quality is typically lower than dedicated pixel-character LoRA output.
   - API headers expose runtime state:
     - `X-Lora-Enabled`
+    - `X-Lora-Block-Reason`
     - `X-Lora-Approved`
     - `X-Lora-Sha256`
     - `X-License-Strict-Mode`
     - `X-Lora-Commercial-Allowed`
 
 ## Deployment Checklist
+
 - [ ] Confirm every model source URL is recorded.
 - [ ] Confirm exact version/hash for each model file.
 - [ ] Confirm license text archived in repo or legal docs.

@@ -5,6 +5,7 @@ import asyncio, uuid
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import Response
 from PIL import Image
+import threading
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -35,6 +36,7 @@ _diffusion_stylizer_key: Optional[str] = None
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _JOBS_LOCK = asyncio.Lock()
 _TASKS: set[asyncio.Task] = set()
+_stylizer_lock = threading.Lock()
 
 
 def _now_ms() -> int:
@@ -143,7 +145,7 @@ def _pixelate_sync(content: bytes, params: Dict[str, Any]) -> Tuple[bytes, Dict[
         "lora_commercial_allowed": str(getattr(runtime_settings, "PIXELART_LORA_COMMERCIAL_ALLOWED", False)),
     }
     if mode_used == "model":
-        stylizer = get_diffusion_stylizer()
+        stylizer = get_diffusion_stylizer(runtime_settings)
         meta["lora_enabled"] = str(stylizer.config.use_lora)
         if stylizer.config.lora_block_reason:
             meta["lora_block_reason"] = stylizer.config.lora_block_reason
@@ -195,9 +197,10 @@ def get_diffusion_stylizer(runtime_settings=None) -> PixelArtDiffusionStylizer:
     global _diffusion_stylizer, _diffusion_stylizer_key
     runtime_settings = runtime_settings or get_settings()
     new_key = _stylizer_cache_key(runtime_settings)
-    if _diffusion_stylizer is None or _diffusion_stylizer_key != new_key:
-        _diffusion_stylizer = PixelArtDiffusionStylizer(default_diffusion_config(runtime_settings))
-        _diffusion_stylizer_key = new_key
+    with _stylizer_lock:
+        if _diffusion_stylizer is None or _diffusion_stylizer_key != new_key:
+            _diffusion_stylizer = PixelArtDiffusionStylizer(default_diffusion_config(runtime_settings))
+            _diffusion_stylizer_key = new_key
     return _diffusion_stylizer
 
 
