@@ -35,6 +35,9 @@ class PixelArtDiffusionConfig:
     use_lora: bool = True
     lora_sha256: str = ""
     lora_block_reason: Optional[str] = None
+    pre_brightness: float = 1.0
+    pre_contrast: float = 1.0
+    pre_saturation: float = 1.0
 
 
 def default_diffusion_config(settings_obj=None) -> PixelArtDiffusionConfig:
@@ -59,6 +62,9 @@ def default_diffusion_config(settings_obj=None) -> PixelArtDiffusionConfig:
     post_saturation = settings.PIXELART_POST_SATURATION
     post_contrast = settings.PIXELART_POST_CONTRAST
     post_brightness = settings.PIXELART_POST_BRIGHTNESS
+    pre_brightness = settings.PIXELART_PRE_BRIGHTNESS
+    pre_contrast = settings.PIXELART_PRE_CONTRAST
+    pre_saturation = settings.PIXELART_PRE_SATURATION
     lora_sha256 = settings.PIXELART_LORA_SHA256.strip().lower()
     base_only_prompt = settings.PIXELART_BASE_ONLY_PROMPT
 
@@ -116,6 +122,9 @@ def default_diffusion_config(settings_obj=None) -> PixelArtDiffusionConfig:
         post_saturation=post_saturation,
         post_contrast=post_contrast,
         post_brightness=post_brightness,
+        pre_brightness=pre_brightness,
+        pre_contrast=pre_contrast,
+        pre_saturation=pre_saturation,
         use_lora=use_lora,
         lora_sha256=lora_sha256,
         lora_block_reason=lora_block_reason,
@@ -164,6 +173,12 @@ class PixelArtDiffusionStylizer:
 
     def apply(self, image: Image.Image) -> Image.Image:
         img = image.convert("RGB")
+        if self.config.pre_brightness != 1.0:
+            img = ImageEnhance.Brightness(img).enhance(self.config.pre_brightness)
+        if self.config.pre_contrast != 1.0:
+            img = ImageEnhance.Contrast(img).enhance(self.config.pre_contrast)
+        if self.config.pre_saturation != 1.0:
+            img = ImageEnhance.Color(img).enhance(self.config.pre_saturation)
         img = self._resize_for_pipe(img)
         generator = torch.Generator("cpu").manual_seed(self.config.seed)
         with torch.inference_mode():

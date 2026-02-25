@@ -43,6 +43,19 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _is_model_style(style: str) -> bool:
+    return style in ("model", "pixelart-model", "stylized", "character_v1")
+
+
+def _normalize_style(style: str, runtime_settings) -> str:
+    s = style.lower().strip()
+    if _is_model_style(s):
+        return "character_v1"
+    if getattr(runtime_settings, "ENABLE_LEGACY_STYLES", False) and s in ("mosaic", "pixelart", "pixel-art"):
+        return s
+    raise ValueError("style must be one of: character_v1")
+
+
 def _job_public(job: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "job_id": job["job_id"],
@@ -69,7 +82,8 @@ def _pixelate_sync(content: bytes, params: Dict[str, Any]) -> Tuple[bytes, Dict[
     mask = segmenter.predict_mask(image)
     mask = resize_mask(mask, image.size)
 
-    style = str(params.get("style", "model")).lower().strip()
+    raw_style = str(params.get("style", runtime_settings.CHARACTER_STYLE_NAME))
+    style = _normalize_style(raw_style, runtime_settings)
     block = int(params.get("block", 12))
     long_edge = int(params.get("long_edge", 160))
     palette = int(params.get("palette", 48))
@@ -110,29 +124,26 @@ def _pixelate_sync(content: bytes, params: Dict[str, Any]) -> Tuple[bytes, Dict[
         else:
             out = pix
 
-    elif style in ("model", "pixelart-model", "stylized"):
+    elif style == "character_v1":
         mode_used = "model"
         stylizer = get_diffusion_stylizer(runtime_settings)
         if runtime_settings.PIXELART_REQUIRE_LORA_FOR_MODEL and not stylizer.config.use_lora:
             raise RuntimeError(
                 f"character_model_disabled: {stylizer.config.lora_block_reason or 'LoRA is not enabled'}"
             )
-        pix = pixel_art_person_diffusion(image, mask, stylizer)
-        if background == "original":
-            base = image.convert("RGBA")
-            base.paste(pix, (0, 0), pix)
-            out = base
-        else:
-            out = pix
+        out = pixel_art_person_diffusion(
+            image, mask, stylizer, transparent_bg=(background == "transparent")
+        )
 
     else:
-        raise ValueError("style must be one of: mosaic, pixelart, model")
+        raise ValueError("style must be one of: character_v1")
 
     buf = io.BytesIO()
     out.save(buf, format="PNG")
 
     meta = {
-        "style_input": style,
+        "style_input": raw_style.lower().strip(),
+        "style_normalized": style,
         "mode_used": mode_used,
         "device": runtime_settings.PIXELART_DEVICE,
         "dtype": runtime_settings.PIXELART_DTYPE,
@@ -265,7 +276,7 @@ async def _run_pixelate_job(job_id: str, content: bytes, params: Dict[str, Any])
 async def pixelate_person_async(
     request: Request,
     file: UploadFile = File(...),
-    style: str = Form("model"),
+    style: str = Form("character_v1"),
     block: int = Form(12),
     long_edge: int = Form(160),
     palette: int = Form(48),
@@ -280,9 +291,10 @@ async def pixelate_person_async(
     if await request.is_disconnected():
         raise HTTPException(status_code=499, detail="client_disconnected")
 
-    style_norm = style.lower().strip()
-    if style_norm not in ("mosaic", "pixelart", "pixel-art", "model", "pixelart-model", "stylized"):
-        raise HTTPException(status_code=400, detail="style must be one of: mosaic, pixelart, model")
+    try:
+        style_norm = _normalize_style(style, get_settings())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     content = await file.read()
     job_id = uuid.uuid4().hex
@@ -381,7 +393,7 @@ async def get_job_result(job_id: str):
 async def pixelate_person(
     request: Request,
     file: UploadFile = File(...),
-    style: str = Form("model"),
+    style: str = Form("character_v1"),
     block: int = Form(12),
     long_edge: int = Form(160),
     palette: int = Form(48),
@@ -404,7 +416,11 @@ async def pixelate_person(
     segmenter = get_segmenter()
     mask = segmenter.predict_mask(image)
     mask = resize_mask(mask, image.size)
-    style = style.lower().strip()
+    raw_style = style
+    try:
+        style = _normalize_style(style, runtime_settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     mode_used = "mosaic"
 
     if style == "mosaic":
@@ -434,7 +450,7 @@ async def pixelate_person(
         else:
             out = pix
 
-    elif style in ("model", "pixelart-model", "stylized"):
+    elif style == "character_v1":
         mode_used = "model"
         try:
             stylizer = get_diffusion_stylizer(runtime_settings)
@@ -446,27 +462,23 @@ async def pixelate_person(
                         + (stylizer.config.lora_block_reason or "LoRA is not enabled")
                     ),
                 )
-            pix = pixel_art_person_diffusion(image, mask, stylizer)
+            out = pixel_art_person_diffusion(
+                image, mask, stylizer, transparent_bg=(background == "transparent")
+            )
         except HTTPException:
             raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"diffusion_failed: {exc}") from exc
 
-        if background == "original":
-            base = image.convert("RGBA")
-            base.paste(pix, (0, 0), pix)
-            out = base
-        else:
-            out = pix
-
     else:
-        raise HTTPException(status_code=400, detail="style must be one of: mosaic, pixelart, model")
+        raise HTTPException(status_code=400, detail="style must be one of: character_v1")
 
     buf = io.BytesIO()
     out.save(buf, format="PNG")
     elapsed_ms = int((time.time() - start) * 1000)
     headers = {
-        "X-Style-Input": style,
+        "X-Style-Input": raw_style.lower().strip(),
+        "X-Style-Normalized": style,
         "X-Mode-Used": mode_used,
         "X-Device": runtime_settings.PIXELART_DEVICE,
         "X-Dtype": runtime_settings.PIXELART_DTYPE,

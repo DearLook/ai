@@ -20,21 +20,20 @@ This document tracks model provenance, license, version, and commercial-use stat
   - Follow Stability AI license and usage policy.
   - Keep policy-compliance checks in product/legal review.
 
-### 2) Pixel style LoRA (optional)
+### 2) Character LoRA (target model)
 
-- Component: `Pixel-art LoRA`
-- Local path: `models/pixelart/pixel-art-xl-v1.1.safetensors`
-- Upstream/source: `CivitAI model 120096 (Pixel Art XL), creator: NeriJS`
-- Version: `v1.1 (CivitAI modelVersionId=135931)`
-- License: `CivitAI creator-defined license (commercial status unverified)`
-- License URL: `https://civitai.com/models/120096?modelVersionId=135931`
-- Commercial-use status: `Not allowed in strict mode`
-- Approval status: `Not approved for production`
-- SHA256: `bbf3d8defbfb3fb71331545225c0cf50c74a748d2525f7c19ebb8f74445de274`
+- Component: `Character LoRA (character_v1)`
+- Local path: `models/character_lora/character_v1.safetensors`
+- Upstream/source: `internal training run`
+- Version: `character_v1`
+- License: `INTERNAL_TBD`
+- License URL: `TBD`
+- Commercial-use status: `TBD`
+- Approval status: `Not approved for production (until metadata finalized)`
+- SHA256: `TBD (fill after training)`
 - Notes:
   - This LoRA is disabled automatically when strict-mode metadata conditions are not fully satisfied.
   - Enable LoRA in production only after license/provenance is verified and recorded.
-  - Internal safetensors metadata indicates a training output name (`pixelbuildings128-v2`) and does not include an explicit commercial redistribution license in-file.
 
 ## Runtime License Guard
 

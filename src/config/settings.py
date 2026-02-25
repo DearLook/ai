@@ -5,13 +5,15 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     LICENSE_STRICT_MODE: bool = True
+    CHARACTER_STYLE_NAME: str = "character_v1"
+    ENABLE_LEGACY_STYLES: bool = False
 
     PIXELART_DEVICE: str = "cpu"
     PIXELART_DTYPE: str = "fp32"
     PIXELART_DIFFUSER_MODEL_ID: str = "stabilityai/stable-diffusion-xl-base-1.0"
     PIXELART_DIFFUSER_PATH: str | None = "models/base/sdxl-base-1.0"
     PIXELART_USE_LORA: bool = True
-    PIXELART_LORA_PATH: str = "models/pixelart/pixel-art-xl-v1.1.safetensors"
+    PIXELART_LORA_PATH: str = "models/character_lora/character_v1.safetensors"
     PIXELART_LORA_SCALE: float = 0.38
     PIXELART_PROMPT: str = (
         "full-body pixel art character sprite, cute style, clean line art, clear facial features, natural colors, simple shading, plain outfit details"
@@ -29,6 +31,9 @@ class Settings(BaseSettings):
     PIXELART_POST_SATURATION: float = 1.08
     PIXELART_POST_CONTRAST: float = 1.04
     PIXELART_POST_BRIGHTNESS: float = 1.03
+    PIXELART_PRE_BRIGHTNESS: float = 1.0
+    PIXELART_PRE_CONTRAST: float = 1.0
+    PIXELART_PRE_SATURATION: float = 1.0
     PIXELART_BASE_ONLY_PROMPT: str = (
         "full-body pixel-art character sprite, clean silhouette, readable face, clean color blocks, simple cel-shading, game sprite style"
     )
