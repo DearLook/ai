@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import os, torch
 from dataclasses import dataclass
+from typing import Optional
 
 
 os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
@@ -31,10 +33,17 @@ class PixelArtDiffusionConfig:
     post_contrast: float = 1.0
     post_brightness: float = 1.0
     use_lora: bool = True
+    lora_sha256: str = ""
+    lora_block_reason: Optional[str] = None
+    pre_brightness: float = 1.0
+    pre_contrast: float = 1.0
+    pre_saturation: float = 1.0
 
 
-def default_diffusion_config() -> PixelArtDiffusionConfig:
-    from src.config.settings import settings
+def default_diffusion_config(settings_obj=None) -> PixelArtDiffusionConfig:
+    from src.config.settings import settings as module_settings
+
+    settings = settings_obj or module_settings
 
     model_id = settings.PIXELART_DIFFUSER_MODEL_ID
     model_path = settings.PIXELART_DIFFUSER_PATH
@@ -53,6 +62,11 @@ def default_diffusion_config() -> PixelArtDiffusionConfig:
     post_saturation = settings.PIXELART_POST_SATURATION
     post_contrast = settings.PIXELART_POST_CONTRAST
     post_brightness = settings.PIXELART_POST_BRIGHTNESS
+    pre_brightness = settings.PIXELART_PRE_BRIGHTNESS
+    pre_contrast = settings.PIXELART_PRE_CONTRAST
+    pre_saturation = settings.PIXELART_PRE_SATURATION
+    lora_sha256 = settings.PIXELART_LORA_SHA256.strip().lower()
+    base_only_prompt = settings.PIXELART_BASE_ONLY_PROMPT
 
     device = settings.PIXELART_DEVICE.lower()
     dtype_env = settings.PIXELART_DTYPE.lower()
@@ -62,6 +76,33 @@ def default_diffusion_config() -> PixelArtDiffusionConfig:
         torch_dtype = torch.bfloat16
     else:
         torch_dtype = torch.float32
+
+    lora_block_reason = None
+    if use_lora and settings.LICENSE_STRICT_MODE:
+        license_unspecified = settings.PIXELART_LORA_LICENSE.strip().upper().startswith("UNSPECIFIED")
+        source_missing = not settings.PIXELART_LORA_SOURCE.strip()
+        version_missing = not settings.PIXELART_LORA_VERSION.strip()
+        license_url_missing = not settings.PIXELART_LORA_LICENSE_URL.strip()
+        upstream_missing = not settings.PIXELART_LORA_UPSTREAM_URL.strip()
+        not_approved = not settings.PIXELART_LORA_APPROVED
+        not_commercial = not settings.PIXELART_LORA_COMMERCIAL_ALLOWED
+        if (
+            not_commercial
+            or not_approved
+            or license_unspecified
+            or source_missing
+            or version_missing
+            or license_url_missing
+            or upstream_missing
+        ):
+            lora_block_reason = (
+                "LICENSE_STRICT_MODE enabled: LoRA metadata/commercial flag is incomplete. "
+                "Set PIXELART_LORA_SOURCE / PIXELART_LORA_VERSION / PIXELART_LORA_LICENSE / "
+                "PIXELART_LORA_LICENSE_URL / PIXELART_LORA_UPSTREAM_URL / PIXELART_LORA_APPROVED=true "
+                "and PIXELART_LORA_COMMERCIAL_ALLOWED=true to enable LoRA."
+            )
+            use_lora = False
+            prompt = base_only_prompt
 
     return PixelArtDiffusionConfig(
         model_id=model_path if (model_path and os.path.exists(model_path)) else model_id,
@@ -81,7 +122,12 @@ def default_diffusion_config() -> PixelArtDiffusionConfig:
         post_saturation=post_saturation,
         post_contrast=post_contrast,
         post_brightness=post_brightness,
+        pre_brightness=pre_brightness,
+        pre_contrast=pre_contrast,
+        pre_saturation=pre_saturation,
         use_lora=use_lora,
+        lora_sha256=lora_sha256,
+        lora_block_reason=lora_block_reason,
     )
 
 
@@ -89,15 +135,32 @@ class PixelArtDiffusionStylizer:
     def __init__(self, config: PixelArtDiffusionConfig):
         if config.use_lora and not os.path.exists(config.lora_path):
             raise FileNotFoundError(f"pixel-art LoRA not found: {config.lora_path}")
+        if config.use_lora and config.lora_sha256:
+            actual = self._sha256(config.lora_path)
+            if actual.lower() != config.lora_sha256.lower():
+                raise ValueError(
+                    f"LoRA SHA256 mismatch: expected={config.lora_sha256} actual={actual}"
+                )
         self.config = config
         self.pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
             config.model_id, torch_dtype=config.torch_dtype
         )
+        if config.use_lora:
+            self.pipe.load_lora_weights(config.lora_path)
+            self.pipe.fuse_lora(lora_scale=config.lora_scale)
         device = "mps" if (config.device == "mps" and torch.backends.mps.is_available()) else "cpu"
         self.pipe.to(device)
         self.pipe.enable_attention_slicing()
         self.pipe.vae.enable_slicing()
         self.pipe.vae.to(torch.float32)
+
+    @staticmethod
+    def _sha256(path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
 
     def _resize_for_pipe(self, image: Image.Image) -> Image.Image:
         w, h = image.size
@@ -110,8 +173,15 @@ class PixelArtDiffusionStylizer:
 
     def apply(self, image: Image.Image) -> Image.Image:
         img = image.convert("RGB")
+        if self.config.pre_brightness != 1.0:
+            img = ImageEnhance.Brightness(img).enhance(self.config.pre_brightness)
+        if self.config.pre_contrast != 1.0:
+            img = ImageEnhance.Contrast(img).enhance(self.config.pre_contrast)
+        if self.config.pre_saturation != 1.0:
+            img = ImageEnhance.Color(img).enhance(self.config.pre_saturation)
         img = self._resize_for_pipe(img)
-        generator = torch.Generator("cpu").manual_seed(self.config.seed)
+        gen_device = "mps" if (self.config.device == "mps" and torch.backends.mps.is_available()) else "cpu"
+        generator = torch.Generator(gen_device).manual_seed(self.config.seed)
         with torch.inference_mode():
             out = self.pipe(
                 prompt=self.config.prompt,

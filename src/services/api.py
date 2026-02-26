@@ -5,6 +5,7 @@ import asyncio, uuid
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import Response
 from PIL import Image
+import threading
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -16,7 +17,7 @@ from src.models.pixelart_diffusion import (
     PixelArtDiffusionStylizer,
     default_diffusion_config,
 )
-from src.config.settings import settings
+from src.config.settings import settings, get_settings
 from src.services.pipeline import (
     PixelArtConfig,
     composite,
@@ -30,14 +31,32 @@ app = FastAPI(title="DearLook AI")
 
 _segmenter: Optional[PersonSegmenter] = None
 _diffusion_stylizer: Optional[PixelArtDiffusionStylizer] = None
+_diffusion_stylizer_key: Optional[str] = None
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _JOBS_LOCK = asyncio.Lock()
 _TASKS: set[asyncio.Task] = set()
+_stylizer_lock = threading.Lock()
 
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _is_model_style(style: str) -> bool:
+    return style in ("model", "pixelart-model", "stylized", "character_v1")
+
+
+def _normalize_style(style: str, runtime_settings) -> str:
+    s = style.lower().strip()
+    if _is_model_style(s):
+        return "character_v1"
+    if getattr(runtime_settings, "ENABLE_LEGACY_STYLES", False) and s in ("mosaic", "pixelart", "pixel-art"):
+        return s
+    allowed = ["character_v1"]
+    if getattr(runtime_settings, "ENACLE_LEGACY_SYTLE", False):
+        allowed += ["mosaic", "pixelart", "pixel_art"]
+    raise ValueError(f"style must be one of: {', '.join(allowed)}")
 
 
 def _job_public(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -60,12 +79,14 @@ async def _run_blocking(fn, *args, **kwargs):
 
 
 def _pixelate_sync(content: bytes, params: Dict[str, Any]) -> Tuple[bytes, Dict[str, Any]]:
+    runtime_settings = get_settings()
     image = Image.open(io.BytesIO(content)).convert("RGB")
     segmenter = get_segmenter()
     mask = segmenter.predict_mask(image)
     mask = resize_mask(mask, image.size)
 
-    style = str(params.get("style", "pixelart")).lower().strip()
+    raw_style = str(params.get("style", runtime_settings.CHARACTER_STYLE_NAME))
+    style = _normalize_style(raw_style, runtime_settings)
     block = int(params.get("block", 12))
     long_edge = int(params.get("long_edge", 160))
     palette = int(params.get("palette", 48))
@@ -106,32 +127,42 @@ def _pixelate_sync(content: bytes, params: Dict[str, Any]) -> Tuple[bytes, Dict[
         else:
             out = pix
 
-    elif style in ("model", "pixelart-model", "stylized"):
+    elif style == "character_v1":
         mode_used = "model"
-        stylizer = get_diffusion_stylizer()
-        pix = pixel_art_person_diffusion(image, mask, stylizer)
-        if background == "original":
-            base = image.convert("RGBA")
-            base.paste(pix, (0, 0), pix)
-            out = base
-        else:
-            out = pix
+        stylizer = get_diffusion_stylizer(runtime_settings)
+        if runtime_settings.PIXELART_REQUIRE_LORA_FOR_MODEL and not stylizer.config.use_lora:
+            raise RuntimeError(
+                f"character_model_disabled: {stylizer.config.lora_block_reason or 'LoRA is not enabled'}"
+            )
+        out = pixel_art_person_diffusion(
+            image, mask, stylizer, transparent_bg=(background == "transparent")
+        )
 
     else:
-        raise ValueError("style must be one of: mosaic, pixelart, model")
+        raise ValueError("style must be one of: character_v1")
 
     buf = io.BytesIO()
     out.save(buf, format="PNG")
 
     meta = {
-        "style_input": style,
+        "style_input": raw_style.lower().strip(),
+        "style_normalized": style,
         "mode_used": mode_used,
-        "device": settings.PIXELART_DEVICE,
-        "dtype": settings.PIXELART_DTYPE,
-        "model_id": settings.PIXELART_DIFFUSER_MODEL_ID,
-        "lora_path": settings.PIXELART_LORA_PATH,
-        "lora_scale": str(getattr(settings, "PIXELART_LORA_SCALE", 1.0)),
+        "device": runtime_settings.PIXELART_DEVICE,
+        "dtype": runtime_settings.PIXELART_DTYPE,
+        "model_id": runtime_settings.PIXELART_DIFFUSER_MODEL_ID,
+        "lora_path": runtime_settings.PIXELART_LORA_PATH,
+        "lora_scale": str(getattr(runtime_settings, "PIXELART_LORA_SCALE", 1.0)),
+        "lora_approved": str(getattr(runtime_settings, "PIXELART_LORA_APPROVED", False)),
+        "lora_sha256": str(getattr(runtime_settings, "PIXELART_LORA_SHA256", "")),
+        "license_strict_mode": str(getattr(runtime_settings, "LICENSE_STRICT_MODE", True)),
+        "lora_commercial_allowed": str(getattr(runtime_settings, "PIXELART_LORA_COMMERCIAL_ALLOWED", False)),
     }
+    if mode_used == "model":
+        stylizer = get_diffusion_stylizer(runtime_settings)
+        meta["lora_enabled"] = str(stylizer.config.use_lora)
+        if stylizer.config.lora_block_reason:
+            meta["lora_block_reason"] = stylizer.config.lora_block_reason
     return buf.getvalue(), meta
 
 
@@ -142,10 +173,48 @@ def get_segmenter() -> PersonSegmenter:
     return _segmenter
 
 
-def get_diffusion_stylizer() -> PixelArtDiffusionStylizer:
-    global _diffusion_stylizer
-    if _diffusion_stylizer is None:
-        _diffusion_stylizer = PixelArtDiffusionStylizer(default_diffusion_config())
+def _stylizer_cache_key(runtime_settings) -> str:
+    fields = (
+        runtime_settings.PIXELART_DEVICE,
+        runtime_settings.PIXELART_DTYPE,
+        runtime_settings.PIXELART_DIFFUSER_MODEL_ID,
+        runtime_settings.PIXELART_DIFFUSER_PATH or "",
+        str(runtime_settings.PIXELART_USE_LORA),
+        runtime_settings.PIXELART_LORA_PATH,
+        str(runtime_settings.PIXELART_LORA_SCALE),
+        runtime_settings.PIXELART_PROMPT,
+        runtime_settings.PIXELART_NEGATIVE_PROMPT,
+        str(runtime_settings.PIXELART_STEPS),
+        str(runtime_settings.PIXELART_STRENGTH),
+        str(runtime_settings.PIXELART_GUIDANCE),
+        str(runtime_settings.PIXELART_MAX_SIZE),
+        str(runtime_settings.PIXELART_SEED),
+        str(runtime_settings.PIXELART_POST_GRID),
+        str(runtime_settings.PIXELART_POST_PALETTE),
+        str(runtime_settings.PIXELART_POST_SATURATION),
+        str(runtime_settings.PIXELART_POST_CONTRAST),
+        str(runtime_settings.PIXELART_POST_BRIGHTNESS),
+        str(runtime_settings.LICENSE_STRICT_MODE),
+        runtime_settings.PIXELART_LORA_SOURCE,
+        runtime_settings.PIXELART_LORA_VERSION,
+        runtime_settings.PIXELART_LORA_LICENSE,
+        runtime_settings.PIXELART_LORA_LICENSE_URL,
+        runtime_settings.PIXELART_LORA_UPSTREAM_URL,
+        runtime_settings.PIXELART_LORA_SHA256,
+        str(runtime_settings.PIXELART_LORA_APPROVED),
+        str(runtime_settings.PIXELART_LORA_COMMERCIAL_ALLOWED),
+    )
+    return "|".join(fields)
+
+
+def get_diffusion_stylizer(runtime_settings=None) -> PixelArtDiffusionStylizer:
+    global _diffusion_stylizer, _diffusion_stylizer_key
+    runtime_settings = runtime_settings or get_settings()
+    new_key = _stylizer_cache_key(runtime_settings)
+    with _stylizer_lock:
+        if _diffusion_stylizer is None or _diffusion_stylizer_key != new_key:
+            _diffusion_stylizer = PixelArtDiffusionStylizer(default_diffusion_config(runtime_settings))
+            _diffusion_stylizer_key = new_key
     return _diffusion_stylizer
 
 
@@ -210,7 +279,7 @@ async def _run_pixelate_job(job_id: str, content: bytes, params: Dict[str, Any])
 async def pixelate_person_async(
     request: Request,
     file: UploadFile = File(...),
-    style: str = Form("pixelart"),
+    style: str = Form("character_v1"),
     block: int = Form(12),
     long_edge: int = Form(160),
     palette: int = Form(48),
@@ -225,9 +294,10 @@ async def pixelate_person_async(
     if await request.is_disconnected():
         raise HTTPException(status_code=499, detail="client_disconnected")
 
-    style_norm = style.lower().strip()
-    if style_norm not in ("mosaic", "pixelart", "pixel-art", "model", "pixelart-model", "stylized"):
-        raise HTTPException(status_code=400, detail="style must be one of: mosaic, pixelart, model")
+    try:
+        style_norm = _normalize_style(style, get_settings())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     content = await file.read()
     job_id = uuid.uuid4().hex
@@ -326,7 +396,7 @@ async def get_job_result(job_id: str):
 async def pixelate_person(
     request: Request,
     file: UploadFile = File(...),
-    style: str = Form("pixelart"),
+    style: str = Form("character_v1"),
     block: int = Form(12),
     long_edge: int = Form(160),
     palette: int = Form(48),
@@ -343,12 +413,17 @@ async def pixelate_person(
     if await request.is_disconnected():
         raise HTTPException(status_code=499, detail="client_disconnected")
 
+    runtime_settings = get_settings()
     content = await file.read()
     image = Image.open(io.BytesIO(content)).convert("RGB")
     segmenter = get_segmenter()
     mask = segmenter.predict_mask(image)
     mask = resize_mask(mask, image.size)
-    style = style.lower().strip()
+    raw_style = style
+    try:
+        style = _normalize_style(style, runtime_settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     mode_used = "mosaic"
 
     if style == "mosaic":
@@ -378,36 +453,53 @@ async def pixelate_person(
         else:
             out = pix
 
-    elif style in ("model", "pixelart-model", "stylized"):
+    elif style == "character_v1":
         mode_used = "model"
         try:
-            stylizer = get_diffusion_stylizer()
-            pix = pixel_art_person_diffusion(image, mask, stylizer)
+            stylizer = get_diffusion_stylizer(runtime_settings)
+            if runtime_settings.PIXELART_REQUIRE_LORA_FOR_MODEL and not stylizer.config.use_lora:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "character_model_disabled: "
+                        + (stylizer.config.lora_block_reason or "LoRA is not enabled")
+                    ),
+                )
+            out = pixel_art_person_diffusion(
+                image, mask, stylizer, transparent_bg=(background == "transparent")
+            )
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"diffusion_failed: {exc}") from exc
 
-        if background == "original":
-            base = image.convert("RGBA")
-            base.paste(pix, (0, 0), pix)
-            out = base
-        else:
-            out = pix
-
     else:
-        raise HTTPException(status_code=400, detail="style must be one of: mosaic, pixelart, model")
+        raise HTTPException(status_code=400, detail="style must be one of: character_v1")
 
     buf = io.BytesIO()
     out.save(buf, format="PNG")
     elapsed_ms = int((time.time() - start) * 1000)
     headers = {
-        "X-Style-Input": style,
+        "X-Style-Input": raw_style.lower().strip(),
+        "X-Style-Normalized": style,
         "X-Mode-Used": mode_used,
-        "X-Device": settings.PIXELART_DEVICE,
-        "X-Dtype": settings.PIXELART_DTYPE,
-        "X-Model-Id": settings.PIXELART_DIFFUSER_MODEL_ID,
-        "X-Lora-Path": settings.PIXELART_LORA_PATH,
-        "X-Lora-Scale": str(getattr(settings, "PIXELART_LORA_SCALE", 1.0)),
+        "X-Device": runtime_settings.PIXELART_DEVICE,
+        "X-Dtype": runtime_settings.PIXELART_DTYPE,
+        "X-Model-Id": runtime_settings.PIXELART_DIFFUSER_MODEL_ID,
+        "X-Lora-Path": runtime_settings.PIXELART_LORA_PATH,
+        "X-Lora-Scale": str(getattr(runtime_settings, "PIXELART_LORA_SCALE", 1.0)),
+        "X-Lora-Approved": str(getattr(runtime_settings, "PIXELART_LORA_APPROVED", False)).lower(),
+        "X-Lora-Sha256": str(getattr(runtime_settings, "PIXELART_LORA_SHA256", "")),
         "X-Elapsed-Ms": str(elapsed_ms),
+        "X-License-Strict-Mode": str(getattr(runtime_settings, "LICENSE_STRICT_MODE", True)).lower(),
+        "X-Lora-Commercial-Allowed": str(getattr(runtime_settings, "PIXELART_LORA_COMMERCIAL_ALLOWED", False)).lower(),
     }
+    if mode_used != "model":
+        headers["X-Quality-Warn"] = "Use style=model for character pixel illustration pipeline"
+    if mode_used == "model":
+        stylizer = get_diffusion_stylizer(runtime_settings)
+        headers["X-Lora-Enabled"] = str(stylizer.config.use_lora).lower()
+        if stylizer.config.lora_block_reason:
+            headers["X-Lora-Block-Reason"] = stylizer.config.lora_block_reason
 
     return Response(content=buf.getvalue(), media_type="image/png", headers=headers)

@@ -4,6 +4,7 @@ outputs/
 settings.txt
 /models/
 AI_README.md
+.vscode
 
 # notebooks cache
 .ipynb_checkpoints/
