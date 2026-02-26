@@ -1,10 +1,11 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from functools import lru_cache
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    LICENSE_STRICT_MODE: bool = True
+    LICENSE_STRICT_MODE: bool = False
     CHARACTER_STYLE_NAME: str = "character_v1"
     ENABLE_LEGACY_STYLES: bool = False
 
@@ -50,7 +51,6 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    # Reload settings from environment/.env on demand.
     return Settings()

@@ -180,7 +180,8 @@ class PixelArtDiffusionStylizer:
         if self.config.pre_saturation != 1.0:
             img = ImageEnhance.Color(img).enhance(self.config.pre_saturation)
         img = self._resize_for_pipe(img)
-        generator = torch.Generator("cpu").manual_seed(self.config.seed)
+        gen_device = "mps" if (self.config.device == "mps" and torch.backends.mps.is_available()) else "cpu"
+        generator = torch.Generator(gen_device).manual_seed(self.config.seed)
         with torch.inference_mode():
             out = self.pipe(
                 prompt=self.config.prompt,

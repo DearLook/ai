@@ -140,7 +140,7 @@ def pixel_art_person_diffusion(
     image: Image.Image,
     mask: np.ndarray,
     stylizer: PixelArtDiffusionStylizer,
-    transparent_bg: bool = False,
+    transparent_bg: bool = True,
 ) -> Image.Image:
     w, h = image.size
     x0, y0, x1, y1 = _mask_to_bbox(mask)
@@ -157,14 +157,12 @@ def pixel_art_person_diffusion(
     styled_rgba = styled.convert("RGBA")
 
     if transparent_bg:
-        # 인물 영역만 남기고 배경을 투명하게
         styled_rgb = np.array(styled_rgba.convert("RGB"))
         styled_masked = apply_alpha(Image.fromarray(styled_rgb), m_crop.astype(np.float32))
         canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         canvas.paste(styled_masked, (x0, y0), styled_masked)
     else:
-        # 배경 포함 픽셀아트 씬 전체를 그대로 반환 (image8 스타일)
-        canvas = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+        canvas = image.convert("RGBA")
         canvas.paste(styled_rgba, (x0, y0))
 
     return canvas

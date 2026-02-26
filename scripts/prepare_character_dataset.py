@@ -62,11 +62,14 @@ def main():
 
     in_dir = Path(args.input_dir)
     out_dir = Path(args.output_dir)
+    if not in_dir.exists() or not in_dir.is_dir():
+        parser.error(f'--input-dir is not a valid directory: {in_dir}')
     seg = PersonSegmenter()
 
     count = 0
     for idx, path in enumerate(_iter_images(in_dir), start=1):
-        img = Image.open(path).convert("RGB")
+        with Image.open(path) as raw:
+            img = raw.convert("RGB")
         mask = seg.predict_mask(img)
         mask = resize_mask(mask, img.size)
 

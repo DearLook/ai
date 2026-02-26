@@ -53,7 +53,10 @@ def _normalize_style(style: str, runtime_settings) -> str:
         return "character_v1"
     if getattr(runtime_settings, "ENABLE_LEGACY_STYLES", False) and s in ("mosaic", "pixelart", "pixel-art"):
         return s
-    raise ValueError("style must be one of: character_v1")
+    allowed = ["character_v1"]
+    if getattr(runtime_settings, "ENACLE_LEGACY_SYTLE", False):
+        allowed += ["mosaic", "pixelart", "pixel_art"]
+    raise ValueError(f"style must be one of: {', '.join(allowed)}")
 
 
 def _job_public(job: Dict[str, Any]) -> Dict[str, Any]:
