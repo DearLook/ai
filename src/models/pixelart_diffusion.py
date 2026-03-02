@@ -142,14 +142,14 @@ class PixelArtDiffusionStylizer:
                     f"LoRA SHA256 mismatch: expected={config.lora_sha256} actual={actual}"
                 )
         self.config = config
+        self._device = "mps" if (config.device == "mps" and torch.backends.mps.is_available()) else "cpu"
         self.pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
             config.model_id, torch_dtype=config.torch_dtype
         )
         if config.use_lora:
             self.pipe.load_lora_weights(config.lora_path)
             self.pipe.fuse_lora(lora_scale=config.lora_scale)
-        device = "mps" if (config.device == "mps" and torch.backends.mps.is_available()) else "cpu"
-        self.pipe.to(device)
+        self.pipe.to(self._device)
         self.pipe.enable_attention_slicing()
         self.pipe.vae.enable_slicing()
         self.pipe.vae.to(torch.float32)
@@ -180,8 +180,7 @@ class PixelArtDiffusionStylizer:
         if self.config.pre_saturation != 1.0:
             img = ImageEnhance.Color(img).enhance(self.config.pre_saturation)
         img = self._resize_for_pipe(img)
-        gen_device = "mps" if (self.config.device == "mps" and torch.backends.mps.is_available()) else "cpu"
-        generator = torch.Generator(gen_device).manual_seed(self.config.seed)
+        generator = torch.Generator(self._device).manual_seed(self.config.seed)
         with torch.inference_mode():
             out = self.pipe(
                 prompt=self.config.prompt,

@@ -17,7 +17,7 @@ from src.models.pixelart_diffusion import (
     PixelArtDiffusionStylizer,
     default_diffusion_config,
 )
-from src.config.settings import settings, get_settings
+from src.config.settings import get_settings
 from src.services.pipeline import (
     PixelArtConfig,
     composite,
@@ -54,9 +54,19 @@ def _normalize_style(style: str, runtime_settings) -> str:
     if getattr(runtime_settings, "ENABLE_LEGACY_STYLES", False) and s in ("mosaic", "pixelart", "pixel-art"):
         return s
     allowed = ["character_v1"]
-    if getattr(runtime_settings, "ENACLE_LEGACY_SYTLE", False):
-        allowed += ["mosaic", "pixelart", "pixel_art"]
+    if getattr(runtime_settings, "ENABLE_LEGACY_STYLES", False):
+        allowed += ["mosaic", "pixelart", "pixel-art"]
     raise ValueError(f"style must be one of: {', '.join(allowed)}")
+
+
+_VALID_BACKGROUNDS = ("transparent", "white", "original")
+
+
+def _normalize_background(bg: str) -> str:
+    b = bg.lower().strip()
+    if b not in _VALID_BACKGROUNDS:
+        raise ValueError(f"background must be one of: {', '.join(_VALID_BACKGROUNDS)}")
+    return b
 
 
 def _job_public(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -96,7 +106,7 @@ def _pixelate_sync(content: bytes, params: Dict[str, Any]) -> Tuple[bytes, Dict[
     smooth = int(params.get("smooth", 3))
     color = float(params.get("color", 1.15))
     contrast = float(params.get("contrast", 1.1))
-    background = str(params.get("background", "transparent"))
+    background = _normalize_background(str(params.get("background", "white")))
 
     mode_used = "mosaic"
 
@@ -134,9 +144,7 @@ def _pixelate_sync(content: bytes, params: Dict[str, Any]) -> Tuple[bytes, Dict[
             raise RuntimeError(
                 f"character_model_disabled: {stylizer.config.lora_block_reason or 'LoRA is not enabled'}"
             )
-        out = pixel_art_person_diffusion(
-            image, mask, stylizer, transparent_bg=(background == "transparent")
-        )
+        out = pixel_art_person_diffusion(image, mask, stylizer, background=background)
 
     else:
         raise ValueError("style must be one of: character_v1")
@@ -159,7 +167,6 @@ def _pixelate_sync(content: bytes, params: Dict[str, Any]) -> Tuple[bytes, Dict[
         "lora_commercial_allowed": str(getattr(runtime_settings, "PIXELART_LORA_COMMERCIAL_ALLOWED", False)),
     }
     if mode_used == "model":
-        stylizer = get_diffusion_stylizer(runtime_settings)
         meta["lora_enabled"] = str(stylizer.config.use_lora)
         if stylizer.config.lora_block_reason:
             meta["lora_block_reason"] = stylizer.config.lora_block_reason
@@ -289,13 +296,14 @@ async def pixelate_person_async(
     smooth: int = Form(3),
     color: float = Form(1.15),
     contrast: float = Form(1.1),
-    background: str = Form("transparent"),
+    background: str = Form("white"),
 ):
     if await request.is_disconnected():
         raise HTTPException(status_code=499, detail="client_disconnected")
 
     try:
         style_norm = _normalize_style(style, get_settings())
+        background = _normalize_background(background)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -344,10 +352,11 @@ async def pixelate_person_async(
 
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str):
-    job = _JOBS.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="job_not_found")
-    return _job_public(job)
+    async with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job_not_found")
+        return _job_public(job)
 
 
 @app.post("/jobs/{job_id}/cancel")
@@ -369,22 +378,25 @@ async def cancel_job(job_id: str):
 
 @app.get("/jobs/{job_id}/result")
 async def get_job_result(job_id: str):
-    job = _JOBS.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="job_not_found")
+    async with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job_not_found")
+        status = job.get("status")
+        result_png = job.get("result_png")
+        meta = job.get("meta", {})
+        error = job.get("error")
 
-    status = job.get("status")
-
-    if status == "SUCCEEDED" and job.get("result_png"):
+    if status == "SUCCEEDED" and result_png:
         headers = {
             "X-Job-Id": job_id,
             "X-Job-Status": status,
-            "X-Mode-Used": str(job.get("meta", {}).get("mode_used", "")),
+            "X-Mode-Used": str(meta.get("mode_used", "")),
         }
-        return Response(content=job["result_png"], media_type="image/png", headers=headers)
+        return Response(content=result_png, media_type="image/png", headers=headers)
 
     if status == "FAILED":
-        raise HTTPException(status_code=500, detail=job.get("error") or "job_failed")
+        raise HTTPException(status_code=500, detail=error or "job_failed")
 
     if status == "CANCELLED":
         raise HTTPException(status_code=409, detail="job_cancelled")
@@ -406,7 +418,7 @@ async def pixelate_person(
     smooth: int = Form(3),
     color: float = Form(1.15),
     contrast: float = Form(1.1),
-    background: str = Form("transparent"),
+    background: str = Form("white"),
 ):
     start = time.time()
 
@@ -422,6 +434,7 @@ async def pixelate_person(
     raw_style = style
     try:
         style = _normalize_style(style, runtime_settings)
+        background = _normalize_background(background)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     mode_used = "mosaic"
@@ -465,9 +478,7 @@ async def pixelate_person(
                         + (stylizer.config.lora_block_reason or "LoRA is not enabled")
                     ),
                 )
-            out = pixel_art_person_diffusion(
-                image, mask, stylizer, transparent_bg=(background == "transparent")
-            )
+            out = pixel_art_person_diffusion(image, mask, stylizer, background=background)
         except HTTPException:
             raise
         except Exception as exc:

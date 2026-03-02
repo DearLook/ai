@@ -8,6 +8,9 @@ from torchvision.models.segmentation import (
 )
 
 
+_COCO_PERSON_CLASS = 15  # COCO dataset class index for "person"
+
+
 class PersonSegmenter:
     def __init__(self, model_path: Optional[str] = None):
         self.model_path = model_path
@@ -21,7 +24,7 @@ class PersonSegmenter:
         with torch.inference_mode():
             input_tensor = self.preprocess(image).unsqueeze(0).to(self.device)
             output = self.model(input_tensor)["out"][0]
-            person_mask = output.argmax(0).eq(15).float().cpu().numpy()
+            person_mask = output.argmax(0).eq(_COCO_PERSON_CLASS).float().cpu().numpy()
             return person_mask.astype(np.float32)
 
 

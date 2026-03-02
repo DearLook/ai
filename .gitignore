@@ -5,6 +5,8 @@ settings.txt
 /models/
 AI_README.md
 .vscode
+.claude
+CLAUDE.md
 
 # notebooks cache
 .ipynb_checkpoints/

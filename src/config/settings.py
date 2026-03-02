@@ -1,5 +1,4 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from functools import lru_cache
 
 
 class Settings(BaseSettings):
@@ -15,28 +14,32 @@ class Settings(BaseSettings):
     PIXELART_DIFFUSER_PATH: str | None = "models/base/sdxl-base-1.0"
     PIXELART_USE_LORA: bool = True
     PIXELART_LORA_PATH: str = "models/character_lora/character_v1.safetensors"
-    PIXELART_LORA_SCALE: float = 0.38
+    PIXELART_LORA_SCALE: float = 1.15
     PIXELART_PROMPT: str = (
-        "full-body pixel art character sprite, cute style, clean line art, clear facial features, natural colors, simple shading, plain outfit details"
+        "dearlook_char, full-body pixel-art character illustration, cute anime sprite, "
+        "clear face, clean outline, cel shading, game character design, simplified clothing folds"
     )
     PIXELART_NEGATIVE_PROMPT: str = (
-        "glitch, neon, cyberpunk, text, logo, letters, symbols, photorealistic, blurry, noise, artifacts, dark, underexposed, muddy colors, low saturation, distorted body, malformed face, armor, military uniform, red-blue hair"
+        "photorealistic, realistic skin, camera photo, blurry, noise, artifacts, "
+        "distorted body, malformed face, neon glitch, text, logo, armor, military, "
+        "over-detailed texture"
     )
-    PIXELART_STEPS: int = 24
-    PIXELART_STRENGTH: float = 0.34
-    PIXELART_GUIDANCE: float = 5.6
+    PIXELART_STEPS: int = 36
+    PIXELART_STRENGTH: float = 0.78
+    PIXELART_GUIDANCE: float = 6.5
     PIXELART_MAX_SIZE: int = 512
     PIXELART_SEED: int = 1234
-    PIXELART_POST_GRID: int = 224
-    PIXELART_POST_PALETTE: int = 72
-    PIXELART_POST_SATURATION: float = 1.08
-    PIXELART_POST_CONTRAST: float = 1.04
-    PIXELART_POST_BRIGHTNESS: float = 1.03
+    PIXELART_POST_GRID: int = 96
+    PIXELART_POST_PALETTE: int = 24
+    PIXELART_POST_SATURATION: float = 1.12
+    PIXELART_POST_CONTRAST: float = 1.08
+    PIXELART_POST_BRIGHTNESS: float = 1.08
     PIXELART_PRE_BRIGHTNESS: float = 1.0
     PIXELART_PRE_CONTRAST: float = 1.0
     PIXELART_PRE_SATURATION: float = 1.0
     PIXELART_BASE_ONLY_PROMPT: str = (
-        "full-body pixel-art character sprite, clean silhouette, readable face, clean color blocks, simple cel-shading, game sprite style"
+        "full-body pixel-art character sprite, clean silhouette, readable face, "
+        "clean color blocks, simple cel-shading, game sprite style, white background"
     )
 
     PIXELART_LORA_SOURCE: str = ""
@@ -51,6 +54,5 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-@lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()
+    return settings
