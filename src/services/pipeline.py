@@ -110,12 +110,6 @@ def _median_color(arr: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return np.median(arr[mask], axis=0).astype(np.uint8)
 
 
-def _light_neutral_color(arr: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    med = _median_color(arr, mask).astype(np.float32)
-    neutral = np.array([220.0, 220.0, 220.0], dtype=np.float32)
-    mixed = 0.35 * med + 0.65 * neutral
-    return np.clip(mixed, 0, 255).astype(np.uint8)
-
 
 def pixel_art_person(image: Image.Image, mask: np.ndarray, config: PixelArtConfig) -> Image.Image:
     w, h = image.size
@@ -140,30 +134,40 @@ def pixel_art_person_diffusion(
     image: Image.Image,
     mask: np.ndarray,
     stylizer: PixelArtDiffusionStylizer,
-    transparent_bg: bool = True,
+    background: str = "transparent",
 ) -> Image.Image:
+    """
+    background:
+      "transparent" — 인물만 RGBA (배경 투명)
+      "white"       — 인물만 흰 배경 위에 합성
+      "original"    — 원본 배경 위에 합성
+    """
     w, h = image.size
     x0, y0, x1, y1 = _mask_to_bbox(mask)
     arr = np.array(image)
     crop = arr[y0:y1, x0:x1]
     m_crop = mask[y0:y1, x0:x1] >= 0.5
 
-    bg = _median_color(crop, m_crop)
+    # diffusion 입력 배경을 밝은 회색으로 채워서 어두운 옷색상에 의한
+    # 출력 전체가 어두워지는 문제를 방지
     filled = crop.copy()
-    filled[~m_crop] = bg
+    filled[~m_crop] = np.array([220, 220, 220], dtype=np.uint8)
     crop_img = Image.fromarray(filled)
 
     styled = stylizer.apply(crop_img)
     styled_rgba = styled.convert("RGBA")
 
-    if transparent_bg:
-        styled_rgb = np.array(styled_rgba.convert("RGB"))
-        styled_masked = apply_alpha(Image.fromarray(styled_rgb), m_crop.astype(np.float32))
-        canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        canvas.paste(styled_masked, (x0, y0), styled_masked)
-    else:
+    if background == "original":
         canvas = image.convert("RGBA")
         canvas.paste(styled_rgba, (x0, y0))
+    else:
+        styled_rgb = np.array(styled_rgba.convert("RGB"))
+        styled_masked = apply_alpha(Image.fromarray(styled_rgb), m_crop.astype(np.float32))
+        if background == "white":
+            canvas = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+        else:  # transparent
+            canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        canvas.paste(styled_masked, (x0, y0), styled_masked)
 
     return canvas
 
