@@ -2,28 +2,140 @@
 language: "ko-KR"
 
 reviews:
-  # 리뷰 톤/강도(부드럽게)
-  profile: "chill"
+  profile: "assertive"
 
-  # PR 전체 요약(High-level summary) 생성
   high_level_summary: true
 
-  # 요약/리뷰를 "친근한 말투"로 유도 (요약 커스터마이징)
   high_level_summary_instructions: |
-    한국어로 친근하고 짧게 요약해줘.
-    아래 형식으로 작성해줘:
-    - 변경 요약(1~3줄)
-    - 주요 변경점(불릿 3~7개)
-    - 주의/리스크(있으면 1~3개)
-    - 다음 액션(있으면 1~3개)
+    시니어 ML 엔지니어 관점에서 한국어로 작성해줘.
+    아래 형식을 반드시 지켜줘:
 
-  # PR 열리거나 커밋이 추가되면 자동 리뷰 시작
+    ## 변경 요약
+    (1~3줄, 이 PR이 왜 필요한지 비즈니스/기술 맥락 포함)
+
+    ## 주요 변경점
+    - 변경된 핵심 사항을 불릿 3~7개로 정리
+
+    ## 잘한 점 👍
+    - 칭찬할 코드 패턴이나 설계 결정을 구체적으로 언급 (없으면 생략)
+
+    ## 리스크 / 주의사항 ⚠️
+    - 배포·운영 관점에서 발생할 수 있는 문제 (없으면 생략)
+
+    ## 다음 액션 📌
+    - 머지 전 반드시 확인해야 할 사항 (없으면 생략)
+
+  path_instructions:
+    - path: "src/services/api.py"
+      instructions: |
+        FastAPI 엔드포인트 코드를 시니어 백엔드 개발자 관점에서 리뷰해줘.
+        다음 항목을 반드시 확인해:
+
+        **동시성 / 스레드 안전성**
+        - asyncio.Lock 미사용 구간에서 공유 상태(_JOBS, _segmenter 등) 접근이 있으면 지적
+        - threading.Lock과 asyncio.Lock 혼용 시 deadlock 가능성 확인
+
+        **에러 처리**
+        - HTTPException 이외의 예외가 클라이언트에 raw stack trace로 노출되는지 확인
+        - 400/409/500 상태코드가 의미에 맞게 쓰이는지 검토
+
+        **코드 품질**
+        - 동일한 로직이 /pixelate와 /pixelate/async 양쪽에 중복되어 있으면 리팩터링 제안
+        - `getattr(obj, "FIELD", default)` 패턴 대신 settings 필드를 직접 참조하도록 권고
+        - Python 3.10+ 기준으로 오래된 타입 힌트 패턴(Optional[X], Union[X,Y])이 있으면 X | None, X | Y 형태로 변경 권고
+
+        **칭찬 대상**
+        - _stylizer_cache_key()를 통한 설정 기반 캐시 무효화 패턴은 좋은 설계면 칭찬
+
+    - path: "src/services/pipeline.py"
+      instructions: |
+        이미지 처리 파이프라인을 시니어 컴퓨터비전 엔지니어 관점에서 리뷰해줘.
+
+        **정확성**
+        - numpy dtype 캐스팅에서 오버플로우·언더플로우 발생 가능성 확인
+        - mask threshold(0.5)가 하드코딩된 경우 파라미터화 권고
+        - NEAREST/BILINEAR/BOX 리샘플링 선택이 사용 목적에 맞는지 검토
+
+        **성능**
+        - np.array ↔ PIL.Image 변환이 불필요하게 반복되는 구간 지적
+        - 대형 이미지에서 메모리 사용량이 급증하는 패턴 지적
+
+        **코드 품질**
+        - 순수 함수로 분리된 구조(side-effect 없음)는 칭찬
+        - dataclass 활용한 설정 관리 패턴은 칭찬
+        - 마법 숫자(magic number)가 있으면 상수화 권고
+
+    - path: "src/models/pixelart_diffusion.py"
+      instructions: |
+        SDXL diffusion 모델 래퍼를 시니어 ML 엔지니어 관점에서 리뷰해줘.
+
+        **모델 신뢰성**
+        - LoRA fuse 이후 unfuse 없이 재사용하면 scale이 누적되는 문제 확인
+        - torch.inference_mode()가 올바른 범위에서 사용되는지 확인
+        - MPS device에서 float16 미지원 이슈 확인 (SDXL on Apple Silicon)
+        - generator device와 pipeline device 불일치 가능성 확인
+
+        **설계**
+        - 모델 로딩이 __init__에서 동기적으로 발생하는 구조의 장단점 언급
+        - SHA256 검증 로직은 보안 관점에서 좋은 패턴이면 칭찬
+        - dataclass로 설정을 분리한 패턴은 칭찬
+
+        **코드 품질**
+        - Python 3.12 기준 오래된 패턴(e.g. from __future__ import annotations가 불필요한 경우) 지적
+        - `tuple[int, int]` 대신 `Tuple[int, int]` 같은 구식 타입 힌트 지적
+
+    - path: "src/models/segmentation.py"
+      instructions: |
+        세그멘테이션 모델 코드를 리뷰해줘.
+
+        - COCO 클래스 인덱스(person=15)를 상수로 분리했는지 확인, 안 했으면 권고
+        - 모델이 클래스 변수로 싱글턴 관리되지 않고 매번 재로딩되는 구조인지 확인
+        - torch.inference_mode() 사용 여부 확인 (no_grad보다 선호)
+        - 디바이스 선택 로직이 settings에 의존하는 구조의 결합도 문제 지적
+
+    - path: "src/config/settings.py"
+      instructions: |
+        Pydantic Settings 구성을 리뷰해줘.
+
+        - get_settings()가 lru_cache나 모듈 싱글턴으로 올바르게 구현되었는지 확인
+          (Settings()를 매번 새로 생성하면 .env 재파싱 비용 및 인스턴스 불일치 발생)
+        - 필드가 너무 많아 단일 클래스가 비대해지면 도메인별 분리 권고
+        - PIXELART_LORA_* 라이선스 관련 필드는 별도 dataclass/model로 분리하는 게 더 깔끔하다고 제안
+        - `str | None` 같은 최신 타입 힌트 사용은 칭찬 (Python 3.10+)
+
+    - path: "scripts/**"
+      instructions: |
+        CLI 스크립트를 리뷰해줘.
+
+        - argparse 대신 typer/click 사용을 현대적 대안으로 제안
+        - sys.path 직접 조작 대신 패키지 설치(pip install -e .) 방식 권고
+        - if __name__ == "__main__" 구조는 올바른 패턴이면 칭찬
+
+    - path: "**/*.py"
+      instructions: |
+        Python 코드 전반에 대해 시니어 개발자 관점에서 아래를 확인해줘:
+
+        **현대적 Python 스타일 (Python 3.10+)**
+        - `Optional[X]` → `X | None`
+        - `Union[X, Y]` → `X | Y`
+        - `Dict[str, Any]` → `dict[str, Any]`
+        - `Tuple[int, int]` → `tuple[int, int]`
+        - `List[str]` → `list[str]`
+        위 패턴이 있으면 반드시 지적하고 수정 예시를 보여줘.
+
+        **불필요한 복잡성**
+        - 한 번만 쓰이는 변수로 인한 불필요한 중간 단계
+        - 중복 로직이 2개 이상 함수에 존재하면 공통 함수 추출 제안
+
+        **보안**
+        - 사용자 입력이 직접 파일 경로·쉘 명령에 사용되는 경우 지적
+        - 예외 메시지에 내부 경로·시스템 정보가 노출되는 경우 지적
+
   auto_review:
     enabled: true
     drafts: false
     poem: false
 
-  # (선택) PR에 리뷰 상태/체크 형태로도 표시
   review_status: true
 
 chat:
