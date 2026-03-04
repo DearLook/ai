@@ -25,6 +25,7 @@ _cartoon_stylizer: CartoonStylizer | None = None
 _JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = asyncio.Lock()
 _TASKS: set[asyncio.Task] = set()
+_segmenter_lock = threading.Lock()
 _stylizer_lock = threading.Lock()
 
 _VALID_BACKGROUNDS = ("transparent", "white", "original")
@@ -61,8 +62,9 @@ async def _run_blocking(fn, *args, **kwargs):
 
 def get_segmenter() -> PersonSegmenter:
     global _segmenter
-    if _segmenter is None:
-        _segmenter = PersonSegmenter()
+    with _segmenter_lock:
+        if _segmenter is None:
+            _segmenter = PersonSegmenter()
     return _segmenter
 
 
@@ -155,8 +157,8 @@ async def pixelate_person_async(
     request: Request,
     file: UploadFile = File(...),
     background: str = Form("white"),
-    long_edge: int = Form(160),
-    palette: int = Form(48),
+    long_edge: int = Form(160, ge=32, le=2048),
+    palette: int = Form(48, ge=2, le=256),
 ):
     if await request.is_disconnected():
         raise HTTPException(status_code=499, detail="client_disconnected")
@@ -262,8 +264,10 @@ async def pixelate_person(
 
     content = await file.read()
     try:
-        png_bytes, _ = _pixelate_sync(
-            content, {"background": background, "long_edge": long_edge, "palette": palette}
+        png_bytes, _ = await _run_blocking(
+            _pixelate_sync,
+            content,
+            {"background": background, "long_edge": long_edge, "palette": palette}
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"pixelate_failed: {exc}") from exc

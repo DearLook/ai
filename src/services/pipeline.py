@@ -12,25 +12,27 @@ if TYPE_CHECKING:
 
 @dataclass
 class PixelArtConfig:
-    target_long_edge: int = 256    # 160 → 256: 픽셀이 너무 뭉개지지 않도록
-    palette_size: int = 64         # 48 → 64: 색상 표현력 향상
+    target_long_edge: int = 256
+    palette_size: int = 64
     dither: bool = False
-    outline: bool = False          # 어두운 의류에서 노이즈 방지
+    outline: bool = False
     edge_threshold: float = 0.12
-    pre_smooth: int = 1            # bilateral 이미 적용되어 중복 스무딩 최소화
+    pre_smooth: int = 1
     color_boost: float = 1.1
     contrast_boost: float = 1.05
+    mask_threshold: float = 0.5
 
 
 def resize_mask(mask: np.ndarray, size: tuple[int, int]) -> np.ndarray:
-    pil = Image.fromarray((mask * 255).astype(np.uint8))
+    safe_mask = np.clip(mask, 0.0, 1.0)
+    pil = Image.fromarray((safe_mask * 255).astype(np.uint8))
     pil = pil.resize(size, Image.NEAREST)
-    return np.array(pil) / 255.0
+    return np.array(pil, dtype=np.float32) / 255.0
 
 
 def apply_alpha(image: Image.Image, mask: np.ndarray) -> Image.Image:
     rgba = image.convert("RGBA")
-    alpha = (mask * 255).astype(np.uint8)
+    alpha = (np.clip(mask, 0.0, 1.0) * 255).astype(np.uint8)
     rgba.putalpha(Image.fromarray(alpha))
     return rgba
 
@@ -98,22 +100,14 @@ def pixel_art_person_cartoon(
     config: PixelArtConfig | None = None,
     background: str = "white",
 ) -> Image.Image:
-    """
-    일러스트(CartoonStylizer) → 픽셀아트 2단계 변환.
-
-    background:
-      "white"       — 흰 배경 (기본)
-      "transparent" — RGBA 투명 배경
-      "original"    — 원본 배경 위에 합성
-    """
     if config is None:
         config = PixelArtConfig()
 
     w, h = image.size
-    x0, y0, x1, y1 = _mask_to_bbox(mask)
-    arr = np.array(image)
-    crop = arr[y0:y1, x0:x1]
-    m_crop = mask[y0:y1, x0:x1] >= 0.5
+    x0, y0, x1, y1 = _mask_to_bbox(mask, threshold=config.mask_threshold)
+    crop_img = image.crop((x0, y0, x1, y1))
+    crop = np.array(crop_img)
+    m_crop = mask[y0:y1, x0:x1] >= config.mask_threshold
 
     # 배경을 밝은 회색으로 채워 일러스트 변환 품질 유지
     filled = crop.copy()
