@@ -1,41 +1,39 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Tuple
+from typing import TYPE_CHECKING
+
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
 
-from src.models.pixelart_diffusion import PixelArtDiffusionStylizer
+if TYPE_CHECKING:
+    from src.models.cartoon_stylizer import CartoonStylizer
 
-@dataclass
-class PixelateConfig:
-    block_size: int = 12
 
 @dataclass
 class PixelArtConfig:
-    target_long_edge: int = 160
-    palette_size: int = 48
+    target_long_edge: int = 256    # 160 → 256: 픽셀이 너무 뭉개지지 않도록
+    palette_size: int = 64         # 48 → 64: 색상 표현력 향상
     dither: bool = False
-    outline: bool = False
+    outline: bool = False          # 어두운 의류에서 노이즈 방지
     edge_threshold: float = 0.12
-    pre_smooth: int = 3
-    color_boost: float = 1.15
-    contrast_boost: float = 1.1
+    pre_smooth: int = 1            # bilateral 이미 적용되어 중복 스무딩 최소화
+    color_boost: float = 1.1
+    contrast_boost: float = 1.05
 
-def load_image(path: str) -> Image.Image:
-    return Image.open(path).convert("RGB")
 
-def save_png(image: Image.Image, path: str) -> None:
-    image.save(path, format="PNG")
-
-def resize_mask(mask: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
+def resize_mask(mask: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     pil = Image.fromarray((mask * 255).astype(np.uint8))
     pil = pil.resize(size, Image.NEAREST)
     return np.array(pil) / 255.0
 
-def pixelate(image: Image.Image, block_size: int) -> Image.Image:
-    w, h = image.size
-    small_w = max(1, w // block_size)
-    small_h = max(1, h // block_size)
-    return image.resize((small_w, small_h), Image.BILINEAR).resize((w, h), Image.NEAREST)
+
+def apply_alpha(image: Image.Image, mask: np.ndarray) -> Image.Image:
+    rgba = image.convert("RGBA")
+    alpha = (mask * 255).astype(np.uint8)
+    rgba.putalpha(Image.fromarray(alpha))
+    return rgba
+
 
 def _edge_map(rgb: np.ndarray, threshold: float) -> np.ndarray:
     lum = (
@@ -47,53 +45,10 @@ def _edge_map(rgb: np.ndarray, threshold: float) -> np.ndarray:
     gy = np.zeros_like(lum)
     gx[:, 1:] = np.abs(lum[:, 1:] - lum[:, :-1])
     gy[1:, :] = np.abs(lum[1:, :] - lum[:-1, :])
-    grad = np.maximum(gx, gy)
-    return grad > threshold
+    return np.maximum(gx, gy) > threshold
 
-def pixel_art(image: Image.Image, config: PixelArtConfig) -> Image.Image:
-    w, h = image.size
-    if w >= h:
-        new_w = config.target_long_edge
-        new_h = max(1, int(h * (config.target_long_edge / w)))
-    else:
-        new_h = config.target_long_edge
-        new_w = max(1, int(w * (config.target_long_edge / h)))
 
-    small = image.resize((new_w, new_h), Image.BOX)
-
-    if config.pre_smooth and config.pre_smooth > 1:
-        small = small.filter(ImageFilter.MedianFilter(config.pre_smooth))
-    if config.color_boost and config.color_boost != 1.0:
-        small = ImageEnhance.Color(small).enhance(config.color_boost)
-    if config.contrast_boost and config.contrast_boost != 1.0:
-        small = ImageEnhance.Contrast(small).enhance(config.contrast_boost)
-    dither = Image.Dither.FLOYDSTEINBERG if config.dither else Image.Dither.NONE
-    quant = small.convert("P", palette=Image.ADAPTIVE, colors=config.palette_size, dither=dither)
-    rgb = quant.convert("RGB")
-
-    if config.outline:
-        arr = np.array(rgb)
-        edges = _edge_map(arr, config.edge_threshold)
-        arr[edges] = np.array([0, 0, 0], dtype=np.uint8)
-        rgb = Image.fromarray(arr)
-
-    pixel = rgb.resize((w, h), Image.NEAREST)
-    return pixel.convert("RGBA")
-
-def composite(original: Image.Image, pixelated: Image.Image, mask: np.ndarray) -> Image.Image:
-    orig = np.array(original).astype(np.float32)
-    pix = np.array(pixelated).astype(np.float32)
-    m = np.expand_dims(mask, axis=2)
-    out = pix * m + orig * (1.0 - m)
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
-
-def apply_alpha(image: Image.Image, mask: np.ndarray) -> Image.Image:
-    rgba = image.convert("RGBA")
-    alpha = (mask * 255).astype(np.uint8)
-    rgba.putalpha(Image.fromarray(alpha))
-    return rgba
-
-def _mask_to_bbox(mask: np.ndarray, threshold: float = 0.5, pad: int = 6) -> Tuple[int, int, int, int]:
+def _mask_to_bbox(mask: np.ndarray, threshold: float = 0.5, pad: int = 6) -> tuple[int, int, int, int]:
     h, w = mask.shape
     ys, xs = np.where(mask >= threshold)
     if xs.size == 0 or ys.size == 0:
@@ -104,76 +59,82 @@ def _mask_to_bbox(mask: np.ndarray, threshold: float = 0.5, pad: int = 6) -> Tup
     y1 = min(int(ys.max()) + pad + 1, h)
     return x0, y0, x1, y1
 
-def _median_color(arr: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    if mask.sum() == 0:
-        return np.array([128, 128, 128], dtype=np.uint8)
-    return np.median(arr[mask], axis=0).astype(np.uint8)
 
-
-
-def pixel_art_person(image: Image.Image, mask: np.ndarray, config: PixelArtConfig) -> Image.Image:
+def _pixel_art(image: Image.Image, config: PixelArtConfig) -> Image.Image:
     w, h = image.size
-    x0, y0, x1, y1 = _mask_to_bbox(mask)
-    arr = np.array(image)
-    crop = arr[y0:y1, x0:x1]
-    m_crop = mask[y0:y1, x0:x1] >= 0.5
+    if w >= h:
+        new_w = config.target_long_edge
+        new_h = max(1, int(h * (config.target_long_edge / w)))
+    else:
+        new_h = config.target_long_edge
+        new_w = max(1, int(w * (config.target_long_edge / h)))
 
-    bg = _median_color(crop, m_crop)
-    filled = crop.copy()
-    filled[~m_crop] = bg
-    crop_img = Image.fromarray(filled)
+    small = image.resize((new_w, new_h), Image.BOX)
 
-    pix = pixel_art(crop_img, config)
-    pix = apply_alpha(pix.convert("RGB"), m_crop.astype(np.float32))
+    if config.pre_smooth > 1:
+        small = small.filter(ImageFilter.MedianFilter(config.pre_smooth))
+    if config.color_boost != 1.0:
+        small = ImageEnhance.Color(small).enhance(config.color_boost)
+    if config.contrast_boost != 1.0:
+        small = ImageEnhance.Contrast(small).enhance(config.contrast_boost)
 
-    canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    canvas.paste(pix, (x0, y0), pix)
-    return canvas
+    dither = Image.Dither.FLOYDSTEINBERG if config.dither else Image.Dither.NONE
+    quant = small.convert("P", palette=Image.ADAPTIVE, colors=config.palette_size, dither=dither)
+    rgb = quant.convert("RGB")
 
-def pixel_art_person_diffusion(
+    if config.outline:
+        arr = np.array(rgb)
+        edges = _edge_map(arr, config.edge_threshold)
+        arr[edges] = np.array([0, 0, 0], dtype=np.uint8)
+        rgb = Image.fromarray(arr)
+
+    return rgb.resize((w, h), Image.NEAREST).convert("RGBA")
+
+
+def pixel_art_person_cartoon(
     image: Image.Image,
     mask: np.ndarray,
-    stylizer: PixelArtDiffusionStylizer,
-    background: str = "transparent",
+    stylizer: CartoonStylizer,
+    config: PixelArtConfig | None = None,
+    background: str = "white",
 ) -> Image.Image:
     """
+    일러스트(CartoonStylizer) → 픽셀아트 2단계 변환.
+
     background:
-      "transparent" — 인물만 RGBA (배경 투명)
-      "white"       — 인물만 흰 배경 위에 합성
+      "white"       — 흰 배경 (기본)
+      "transparent" — RGBA 투명 배경
       "original"    — 원본 배경 위에 합성
     """
+    if config is None:
+        config = PixelArtConfig()
+
     w, h = image.size
     x0, y0, x1, y1 = _mask_to_bbox(mask)
     arr = np.array(image)
     crop = arr[y0:y1, x0:x1]
     m_crop = mask[y0:y1, x0:x1] >= 0.5
 
-    # diffusion 입력 배경을 밝은 회색으로 채워서 어두운 옷색상에 의한
-    # 출력 전체가 어두워지는 문제를 방지
+    # 배경을 밝은 회색으로 채워 일러스트 변환 품질 유지
     filled = crop.copy()
     filled[~m_crop] = np.array([220, 220, 220], dtype=np.uint8)
     crop_img = Image.fromarray(filled)
 
-    styled = stylizer.apply(crop_img)
-    styled_rgba = styled.convert("RGBA")
+    # 1단계: 일러스트 변환
+    cartoon = stylizer.apply(crop_img)
+
+    # 2단계: 픽셀아트 변환
+    pixeled = _pixel_art(cartoon, config)
+
+    # 인물 마스크 적용
+    styled_masked = apply_alpha(pixeled.convert("RGB"), m_crop.astype(np.float32))
 
     if background == "original":
         canvas = image.convert("RGBA")
-        canvas.paste(styled_rgba, (x0, y0))
+        canvas.paste(styled_masked, (x0, y0), styled_masked)
     else:
-        styled_rgb = np.array(styled_rgba.convert("RGB"))
-        styled_masked = apply_alpha(Image.fromarray(styled_rgb), m_crop.astype(np.float32))
-        if background == "white":
-            canvas = Image.new("RGBA", (w, h), (255, 255, 255, 255))
-        else:  # transparent
-            canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        canvas_color = (255, 255, 255, 255) if background == "white" else (0, 0, 0, 0)
+        canvas = Image.new("RGBA", (w, h), canvas_color)
         canvas.paste(styled_masked, (x0, y0), styled_masked)
 
     return canvas
-
-def run_pipeline(input_path: str, output_path: str, mask: np.ndarray, config: PixelateConfig) -> None:
-    image = load_image(input_path)
-    mask_resized = resize_mask(mask, image.size)
-    pix = pixelate(image, config.block_size)
-    out = composite(image, pix, mask_resized)
-    save_png(out, output_path)
