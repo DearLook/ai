@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance
+from scipy.ndimage import binary_dilation
 
 if TYPE_CHECKING:
     from src.models.cartoon_stylizer import CartoonStylizer
@@ -50,7 +51,13 @@ def _edge_map(rgb: np.ndarray, threshold: float) -> np.ndarray:
     return np.maximum(gx, gy) > threshold
 
 
-def _mask_to_bbox(mask: np.ndarray, threshold: float = 0.5, pad: int = 6) -> tuple[int, int, int, int]:
+def _mask_to_bbox(
+    mask: np.ndarray,
+    threshold: float = 0.5,
+    pad: int = 6,
+    bottom_pad: int = 20,
+) -> tuple[int, int, int, int]:
+    """bbox 추출. bottom_pad를 더 크게 주어 신발 등 하단 악세사리를 포함."""
     h, w = mask.shape
     ys, xs = np.where(mask >= threshold)
     if xs.size == 0 or ys.size == 0:
@@ -58,7 +65,7 @@ def _mask_to_bbox(mask: np.ndarray, threshold: float = 0.5, pad: int = 6) -> tup
     x0 = max(int(xs.min()) - pad, 0)
     y0 = max(int(ys.min()) - pad, 0)
     x1 = min(int(xs.max()) + pad + 1, w)
-    y1 = min(int(ys.max()) + pad + 1, h)
+    y1 = min(int(ys.max()) + bottom_pad + 1, h)
     return x0, y0, x1, y1
 
 
@@ -73,8 +80,6 @@ def _pixel_art(image: Image.Image, config: PixelArtConfig) -> Image.Image:
 
     small = image.resize((new_w, new_h), Image.BOX)
 
-    if config.pre_smooth > 1:
-        small = small.filter(ImageFilter.MedianFilter(config.pre_smooth))
     if config.color_boost != 1.0:
         small = ImageEnhance.Color(small).enhance(config.color_boost)
     if config.contrast_boost != 1.0:
@@ -96,25 +101,34 @@ def _pixel_art(image: Image.Image, config: PixelArtConfig) -> Image.Image:
 def pixel_art_person_cartoon(
     image: Image.Image,
     mask: np.ndarray,
-    stylizer: CartoonStylizer,
+    stylizer: "CartoonStylizer",
     config: PixelArtConfig | None = None,
     background: str = "white",
+    mask_dilate_px: int = 12,
 ) -> Image.Image:
+    """mask_dilate_px: 마스크 팽창 반경(픽셀). 핸드폰·가방·신발 등 인물 인접 악세사리 포함."""
     if config is None:
         config = PixelArtConfig()
 
+    # 마스크 dilation — 인물 주변 악세사리(핸드폰, 가방, 신발 등) 포함
+    binary = mask >= config.mask_threshold
+    if mask_dilate_px > 0:
+        struct = np.ones((mask_dilate_px * 2 + 1, mask_dilate_px * 2 + 1), dtype=bool)
+        binary = binary_dilation(binary, structure=struct)
+    dilated_mask = binary.astype(np.float32)
+
     w, h = image.size
-    x0, y0, x1, y1 = _mask_to_bbox(mask, threshold=config.mask_threshold)
+    x0, y0, x1, y1 = _mask_to_bbox(dilated_mask, threshold=0.5)
     crop_img = image.crop((x0, y0, x1, y1))
     crop = np.array(crop_img)
-    m_crop = mask[y0:y1, x0:x1] >= config.mask_threshold
+    m_crop = dilated_mask[y0:y1, x0:x1] >= 0.5
 
     # 배경을 밝은 회색으로 채워 일러스트 변환 품질 유지
     filled = crop.copy()
     filled[~m_crop] = np.array([220, 220, 220], dtype=np.uint8)
     crop_img = Image.fromarray(filled)
 
-    # 1단계: 일러스트 변환
+    # 1단계: 일러스트 변환 (full-res bilateral — 강한 색 평탄화가 핵심)
     cartoon = stylizer.apply(crop_img)
 
     # 2단계: 픽셀아트 변환

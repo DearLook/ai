@@ -1,6 +1,7 @@
 torch
 torchvision
 numpy
+scipy
 pillow
 fastapi
 uvicorn
