@@ -1,6 +1,7 @@
 # data / outputs
 data/
 outputs/
+scripts/
 settings.txt
 /models/
 AI_README.md
