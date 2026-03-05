@@ -121,7 +121,7 @@ def pixel_art_person_cartoon(
     pixeled = _pixel_art(cartoon, config)
 
     # 인물 마스크 적용
-    styled_masked = apply_alpha(pixeled.convert("RGB"), m_crop.astype(np.float32))
+    styled_masked = apply_alpha(pixeled, m_crop.astype(np.float32))
 
     if background == "original":
         canvas = image.convert("RGBA")

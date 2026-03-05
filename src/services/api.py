@@ -8,6 +8,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import Response
 from PIL import Image
 import threading
+import logging
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if PROJECT_ROOT not in sys.path:
@@ -18,6 +19,7 @@ from src.models.cartoon_stylizer import CartoonStylizer, CartoonConfig
 from src.services.pipeline import PixelArtConfig, pixel_art_person_cartoon, resize_mask
 
 app = FastAPI(title="DearLook AI")
+logger = logging.getLogger(__name__)
 
 _segmenter: PersonSegmenter | None = None
 _cartoon_stylizer: CartoonStylizer | None = None
@@ -143,12 +145,13 @@ async def _run_pixelate_job(job_id: str, content: bytes, params: dict[str, Any])
                 j["meta"] = meta
 
     except Exception as exc:
+        logger.exception("pixelate job failed: job_id=%s", job_id)
         async with _JOBS_LOCK:
             j = _JOBS.get(job_id)
             if j:
                 j["status"] = "CANCELLED" if j.get("cancelled") else "FAILED"
                 if not j.get("cancelled"):
-                    j["error"] = f"{type(exc).__name__}: {exc}"
+                    j["error"] = "job_failed"
                 j["updated_ms"] = _now_ms()
 
 
@@ -229,7 +232,6 @@ async def get_job_result(job_id: str):
             raise HTTPException(status_code=404, detail="job_not_found")
         status = job.get("status")
         result_png = job.get("result_png")
-        error = job.get("error")
 
     if status == "SUCCEEDED" and result_png:
         return Response(
@@ -238,7 +240,7 @@ async def get_job_result(job_id: str):
             headers={"X-Job-Id": job_id, "X-Job-Status": status},
         )
     if status == "FAILED":
-        raise HTTPException(status_code=500, detail=error or "job_failed")
+        raise HTTPException(status_code=500, detail="job_failed")
     if status == "CANCELLED":
         raise HTTPException(status_code=409, detail="job_cancelled")
     raise HTTPException(status_code=202, detail=f"job_{status.lower()}")
@@ -270,7 +272,8 @@ async def pixelate_person(
             {"background": background, "long_edge": long_edge, "palette": palette}
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"pixelate_failed: {exc}") from exc
+        logger.exception("pixelate sync failed")
+        raise HTTPException(status_code=500, detail="pixelate_failed") from exc
 
     elapsed_ms = int((time.time() - start) * 1000)
     return Response(
