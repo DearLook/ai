@@ -4,6 +4,7 @@ outputs/
 scripts/
 settings.txt
 /models/
+train/
 AI_README.md
 .vscode
 .claude
