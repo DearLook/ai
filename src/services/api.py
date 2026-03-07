@@ -251,8 +251,8 @@ async def pixelate_person(
     request: Request,
     file: UploadFile = File(...),
     background: str = Form("white"),
-    long_edge: int = Form(256),
-    palette: int = Form(64),
+    long_edge: int = Form(256, ge=32, le=2048),
+    palette: int = Form(64, ge=2, le=256),
 ):
     start = time.time()
 

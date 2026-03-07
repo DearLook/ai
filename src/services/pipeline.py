@@ -101,7 +101,7 @@ def _pixel_art(image: Image.Image, config: PixelArtConfig) -> Image.Image:
 def pixel_art_person_cartoon(
     image: Image.Image,
     mask: np.ndarray,
-    stylizer: "CartoonStylizer",
+    stylizer: CartoonStylizer,
     config: PixelArtConfig | None = None,
     background: str = "white",
     mask_dilate_px: int = 12,
@@ -115,13 +115,13 @@ def pixel_art_person_cartoon(
     if mask_dilate_px > 0:
         struct = np.ones((mask_dilate_px * 2 + 1, mask_dilate_px * 2 + 1), dtype=bool)
         binary = binary_dilation(binary, structure=struct)
-    dilated_mask = binary.astype(np.float32)
+    dilated_mask = binary
 
     w, h = image.size
-    x0, y0, x1, y1 = _mask_to_bbox(dilated_mask, threshold=0.5)
+    x0, y0, x1, y1 = _mask_to_bbox(dilated_mask, threshold=config.mask_threshold)
     crop_img = image.crop((x0, y0, x1, y1))
     crop = np.array(crop_img)
-    m_crop = dilated_mask[y0:y1, x0:x1] >= 0.5
+    m_crop = dilated_mask[y0:y1, x0:x1] >= config.mask_threshold
 
     # 배경을 밝은 회색으로 채워 일러스트 변환 품질 유지
     filled = crop.copy()
