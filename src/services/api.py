@@ -85,8 +85,8 @@ def _pixelate_sync(content: bytes, params: dict[str, Any]) -> tuple[bytes, dict[
     mask = resize_mask(mask, image.size)
 
     background = _normalize_background(str(params.get("background", "white")))
-    long_edge = int(params.get("long_edge", 160))
-    palette = int(params.get("palette", 48))
+    long_edge = int(params.get("long_edge", 256))
+    palette = int(params.get("palette", 64))
 
     stylizer = get_cartoon_stylizer()
     config = PixelArtConfig(
@@ -160,8 +160,8 @@ async def pixelate_person_async(
     request: Request,
     file: UploadFile = File(...),
     background: str = Form("white"),
-    long_edge: int = Form(160, ge=32, le=2048),
-    palette: int = Form(48, ge=2, le=256),
+    long_edge: int = Form(256, ge=32, le=2048),
+    palette: int = Form(64, ge=2, le=256),
 ):
     if await request.is_disconnected():
         raise HTTPException(status_code=499, detail="client_disconnected")
@@ -251,8 +251,8 @@ async def pixelate_person(
     request: Request,
     file: UploadFile = File(...),
     background: str = Form("white"),
-    long_edge: int = Form(160),
-    palette: int = Form(48),
+    long_edge: int = Form(256, ge=32, le=2048),
+    palette: int = Form(64, ge=2, le=256),
 ):
     start = time.time()
 

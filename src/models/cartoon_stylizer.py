@@ -18,10 +18,11 @@ class CartoonConfig:
     saturation_boost: float = 1.8   # 채도 강화 (일러스트는 채도가 높음)
 
     # bilateral filter: 색상 평탄화
+    # sigmaColor: 50~80 권장 — 높으면 경계 무시하고 일반 블러처럼 동작
     bilateral_d: int = 9
-    bilateral_sigma_color: int = 300
-    bilateral_sigma_space: int = 300
-    bilateral_passes: int = 7       # 많을수록 평탄화 → 일러스트 느낌
+    bilateral_sigma_color: int = 75
+    bilateral_sigma_space: int = 75
+    bilateral_passes: int = 8
 
 
 class CartoonStylizer:
