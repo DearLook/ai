@@ -9,6 +9,7 @@ from scipy.ndimage import binary_dilation
 
 if TYPE_CHECKING:
     from src.models.cartoon_stylizer import CartoonStylizer
+    from src.models.anime_stylizer import AnimeStylizer
 
 
 @dataclass
@@ -135,6 +136,62 @@ def pixel_art_person_cartoon(
     pixeled = _pixel_art(cartoon, config)
 
     # 인물 마스크 적용
+    styled_masked = apply_alpha(pixeled, m_crop.astype(np.float32))
+
+    if background == "original":
+        canvas = image.convert("RGBA")
+        canvas.paste(styled_masked, (x0, y0), styled_masked)
+    else:
+        canvas_color = (255, 255, 255, 255) if background == "white" else (0, 0, 0, 0)
+        canvas = Image.new("RGBA", (w, h), canvas_color)
+        canvas.paste(styled_masked, (x0, y0), styled_masked)
+
+    return canvas
+
+
+def pixel_art_person_anime(
+    image: Image.Image,
+    mask: np.ndarray,
+    stylizer: "AnimeStylizer",
+    config: PixelArtConfig | None = None,
+    background: str = "white",
+    mask_dilate_px: int = 12,
+) -> Image.Image:
+    """AnimeGAN2 일러스트 변환 → 픽셀아트."""
+    if config is None:
+        config = PixelArtConfig(
+            target_long_edge=112,
+            palette_size=20,
+            outline=True,
+            edge_threshold=0.07,
+            color_boost=1.3,
+            contrast_boost=1.15,
+        )
+
+    binary = mask >= config.mask_threshold
+    if mask_dilate_px > 0:
+        struct = np.ones((mask_dilate_px * 2 + 1, mask_dilate_px * 2 + 1), dtype=bool)
+        binary = binary_dilation(binary, structure=struct)
+    dilated_mask = binary
+
+    w, h = image.size
+    x0, y0, x1, y1 = _mask_to_bbox(dilated_mask, threshold=config.mask_threshold)
+    crop_img = image.crop((x0, y0, x1, y1))
+    crop_arr = np.array(crop_img)
+    m_crop = dilated_mask[y0:y1, x0:x1] >= config.mask_threshold
+
+    # 배경 흰색으로 채워 애니 변환 품질 유지
+    filled = crop_arr.copy()
+    filled[~m_crop] = np.array([255, 255, 255], dtype=np.uint8)
+    crop_img = Image.fromarray(filled)
+
+    # 1단계: AnimeGAN2 일러스트 변환
+    anime_out = stylizer.apply(crop_img)
+
+    # 2단계: 픽셀아트 변환
+    pixeled = _pixel_art(anime_out, config)
+
+    # 마스크 합성
     styled_masked = apply_alpha(pixeled, m_crop.astype(np.float32))
 
     if background == "original":

@@ -16,19 +16,27 @@ if PROJECT_ROOT not in sys.path:
 
 from src.models.segmentation import PersonSegmenter
 from src.models.cartoon_stylizer import CartoonStylizer, CartoonConfig
-from src.services.pipeline import PixelArtConfig, pixel_art_person_cartoon, resize_mask
+from src.models.anime_stylizer import AnimeStylizer, AnimeConfig
+from src.services.pipeline import (
+    PixelArtConfig,
+    pixel_art_person_cartoon,
+    pixel_art_person_anime,
+    resize_mask,
+)
 
 app = FastAPI(title="DearLook AI")
 logger = logging.getLogger(__name__)
 
 _segmenter: PersonSegmenter | None = None
 _cartoon_stylizer: CartoonStylizer | None = None
+_anime_stylizer: AnimeStylizer | None = None
 
 _JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = asyncio.Lock()
 _TASKS: set[asyncio.Task] = set()
 _segmenter_lock = threading.Lock()
 _stylizer_lock = threading.Lock()
+_anime_lock = threading.Lock()
 
 _VALID_BACKGROUNDS = ("transparent", "white", "original")
 
@@ -78,6 +86,16 @@ def get_cartoon_stylizer() -> CartoonStylizer:
     return _cartoon_stylizer
 
 
+def get_anime_stylizer() -> AnimeStylizer:
+    global _anime_stylizer
+    with _anime_lock:
+        if _anime_stylizer is None:
+            from src.config.settings import settings
+            device = settings.PIXELART_DEVICE.lower()
+            _anime_stylizer = AnimeStylizer(AnimeConfig(device=device))
+    return _anime_stylizer
+
+
 def _pixelate_sync(content: bytes, params: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
     image = Image.open(io.BytesIO(content)).convert("RGB")
     segmenter = get_segmenter()
@@ -85,19 +103,23 @@ def _pixelate_sync(content: bytes, params: dict[str, Any]) -> tuple[bytes, dict[
     mask = resize_mask(mask, image.size)
 
     background = _normalize_background(str(params.get("background", "white")))
+    style = str(params.get("style", "character"))
     long_edge = int(params.get("long_edge", 256))
     palette = int(params.get("palette", 64))
+    config = PixelArtConfig(target_long_edge=long_edge, palette_size=palette)
 
-    stylizer = get_cartoon_stylizer()
-    config = PixelArtConfig(
-        target_long_edge=long_edge,
-        palette_size=palette,
-    )
-    out = pixel_art_person_cartoon(image, mask, stylizer, config, background=background)
+    if style == "character":
+        stylizer = get_anime_stylizer()
+        out = pixel_art_person_anime(image, mask, stylizer, config, background=background)
+        mode = "anime_pixelart"
+    else:
+        stylizer = get_cartoon_stylizer()
+        out = pixel_art_person_cartoon(image, mask, stylizer, config, background=background)
+        mode = "cartoon_pixelart"
 
     buf = io.BytesIO()
     out.save(buf, format="PNG")
-    return buf.getvalue(), {"mode": "cartoon_pixelart"}
+    return buf.getvalue(), {"mode": mode}
 
 
 async def _run_pixelate_job(job_id: str, content: bytes, params: dict[str, Any]) -> None:
@@ -160,6 +182,7 @@ async def pixelate_person_async(
     request: Request,
     file: UploadFile = File(...),
     background: str = Form("white"),
+    style: str = Form("character"),
     long_edge: int = Form(256, ge=32, le=2048),
     palette: int = Form(64, ge=2, le=256),
 ):
@@ -187,7 +210,7 @@ async def pixelate_person_async(
     async with _JOBS_LOCK:
         _JOBS[job_id] = job
 
-    params = {"background": background, "long_edge": long_edge, "palette": palette}
+    params = {"background": background, "style": style, "long_edge": long_edge, "palette": palette}
     task = asyncio.create_task(_run_pixelate_job(job_id, content, params))
     _TASKS.add(task)
     task.add_done_callback(_TASKS.discard)
@@ -251,6 +274,7 @@ async def pixelate_person(
     request: Request,
     file: UploadFile = File(...),
     background: str = Form("white"),
+    style: str = Form("character"),
     long_edge: int = Form(256, ge=32, le=2048),
     palette: int = Form(64, ge=2, le=256),
 ):
@@ -269,7 +293,7 @@ async def pixelate_person(
         png_bytes, _ = await _run_blocking(
             _pixelate_sync,
             content,
-            {"background": background, "long_edge": long_edge, "palette": palette}
+            {"background": background, "style": style, "long_edge": long_edge, "palette": palette}
         )
     except Exception as exc:
         logger.exception("pixelate sync failed")
