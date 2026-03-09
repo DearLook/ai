@@ -12,6 +12,19 @@ import torch
 import numpy as np
 from PIL import Image, ImageEnhance
 
+REPO = "bryandlee/animegan2-pytorch:main"
+
+def __init__(self, config: AnimeConfig | None = None) -> None:
+    self.config = config or AnimeConfig()
+    self.device = self.resolve_device(self.config.device)
+    self.model = torch.hub.load(
+        self.REPO,
+        "generator",
+        pretrained=self.config.pretrained,
+        trust_repo=True,
+    )
+    self.model.to(self._device).eval()
+
 
 @dataclass
 class AnimeConfig:

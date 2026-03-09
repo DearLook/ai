@@ -25,6 +25,15 @@ class PixelArtConfig:
     mask_threshold: float = 0.5
 
 
+ANIME_PIXELART_DEFAULTS = PixelArtConfig(
+    target_long_edge=112,
+    palette_size=20,
+    outline=True,
+    edge_threshold=0.07,
+    color_boost=1.3,
+    contrast_boost=1.15,
+)
+
 def resize_mask(mask: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     safe_mask = np.clip(mask, 0.0, 1.0)
     pil = Image.fromarray((safe_mask * 255).astype(np.uint8))
@@ -152,21 +161,14 @@ def pixel_art_person_cartoon(
 def pixel_art_person_anime(
     image: Image.Image,
     mask: np.ndarray,
-    stylizer: "AnimeStylizer",
+    stylizer: AnimeStylizer,
     config: PixelArtConfig | None = None,
     background: str = "white",
     mask_dilate_px: int = 12,
 ) -> Image.Image:
     """AnimeGAN2 일러스트 변환 → 픽셀아트."""
     if config is None:
-        config = PixelArtConfig(
-            target_long_edge=112,
-            palette_size=20,
-            outline=True,
-            edge_threshold=0.07,
-            color_boost=1.3,
-            contrast_boost=1.15,
-        )
+        config = ANIME_PIXELART_DEFAULTS
 
     binary = mask >= config.mask_threshold
     if mask_dilate_px > 0:
