@@ -126,13 +126,13 @@ def _stylizer_to_pixel_art(
 
     w, h = image.size
     x0, y0, x1, y1 = _mask_to_bbox(dilated_mask, threshold=config.mask_threshold)
-    crop_img = image.crop((x0, y0, x1, y1))
-    crop_arr = np.array(crop_img)
-    m_crop = dilated_mask[y0:y1, x0:x1] >= config.mask_threshold
+    crop_img = image.crop((x0, y0, x1, y1)).convert("RGB")
+    m_crop = dilated_mask[y0:y1, x0:x1]
 
-    filled = crop_arr.copy()
-    filled[~m_crop] = np.array(fill_color, dtype=np.uint8)
-    crop_img = Image.fromarray(filled)
+    bg = Image.new("RGB", crop_img.size, fill_color)
+    mask_pil = Image.fromarray((m_crop * 255).astype(np.uint8), mode="L")
+    bg.paste(crop_img, mask=mask_pil)
+    crop_img = bg
 
     styled = stylizer.apply(crop_img)
     pixeled = _pixel_art(styled, config)
