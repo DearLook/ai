@@ -9,6 +9,7 @@ from scipy.ndimage import binary_dilation
 
 if TYPE_CHECKING:
     from src.models.cartoon_stylizer import CartoonStylizer
+    from src.models.anime_stylizer import AnimeStylizer
 
 
 @dataclass
@@ -23,6 +24,15 @@ class PixelArtConfig:
     contrast_boost: float = 1.05
     mask_threshold: float = 0.5
 
+
+ANIME_PIXELART_DEFAULTS = PixelArtConfig(
+    target_long_edge=112,
+    palette_size=20,
+    outline=True,
+    edge_threshold=0.07,
+    color_boost=1.3,
+    contrast_boost=1.15,
+)
 
 def resize_mask(mask: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     safe_mask = np.clip(mask, 0.0, 1.0)
@@ -98,19 +108,16 @@ def _pixel_art(image: Image.Image, config: PixelArtConfig) -> Image.Image:
     return rgb.resize((w, h), Image.NEAREST).convert("RGBA")
 
 
-def pixel_art_person_cartoon(
+def _stylizer_to_pixel_art(
     image: Image.Image,
     mask: np.ndarray,
-    stylizer: CartoonStylizer,
-    config: PixelArtConfig | None = None,
-    background: str = "white",
-    mask_dilate_px: int = 12,
+    stylizer,
+    config: PixelArtConfig,
+    background: str,
+    mask_dilate_px: int,
+    fill_color: tuple[int, int, int],
 ) -> Image.Image:
-    """mask_dilate_px: 마스크 팽창 반경(픽셀). 핸드폰·가방·신발 등 인물 인접 악세사리 포함."""
-    if config is None:
-        config = PixelArtConfig()
-
-    # 마스크 dilation — 인물 주변 악세사리(핸드폰, 가방, 신발 등) 포함
+    """공통 파이프라인: 마스크 dilation → crop → stylizer → 픽셀아트 → 합성."""
     binary = mask >= config.mask_threshold
     if mask_dilate_px > 0:
         struct = np.ones((mask_dilate_px * 2 + 1, mask_dilate_px * 2 + 1), dtype=bool)
@@ -119,22 +126,16 @@ def pixel_art_person_cartoon(
 
     w, h = image.size
     x0, y0, x1, y1 = _mask_to_bbox(dilated_mask, threshold=config.mask_threshold)
-    crop_img = image.crop((x0, y0, x1, y1))
-    crop = np.array(crop_img)
-    m_crop = dilated_mask[y0:y1, x0:x1] >= config.mask_threshold
+    crop_img = image.crop((x0, y0, x1, y1)).convert("RGB")
+    m_crop = dilated_mask[y0:y1, x0:x1]
 
-    # 배경을 밝은 회색으로 채워 일러스트 변환 품질 유지
-    filled = crop.copy()
-    filled[~m_crop] = np.array([220, 220, 220], dtype=np.uint8)
-    crop_img = Image.fromarray(filled)
+    bg = Image.new("RGB", crop_img.size, fill_color)
+    mask_pil = Image.fromarray((m_crop * 255).astype(np.uint8), mode="L")
+    bg.paste(crop_img, mask=mask_pil)
+    crop_img = bg
 
-    # 1단계: 일러스트 변환 (full-res bilateral — 강한 색 평탄화가 핵심)
-    cartoon = stylizer.apply(crop_img)
-
-    # 2단계: 픽셀아트 변환
-    pixeled = _pixel_art(cartoon, config)
-
-    # 인물 마스크 적용
+    styled = stylizer.apply(crop_img)
+    pixeled = _pixel_art(styled, config)
     styled_masked = apply_alpha(pixeled, m_crop.astype(np.float32))
 
     if background == "original":
@@ -146,3 +147,37 @@ def pixel_art_person_cartoon(
         canvas.paste(styled_masked, (x0, y0), styled_masked)
 
     return canvas
+
+
+def pixel_art_person_cartoon(
+    image: Image.Image,
+    mask: np.ndarray,
+    stylizer: CartoonStylizer,
+    config: PixelArtConfig | None = None,
+    background: str = "white",
+    mask_dilate_px: int = 12,
+) -> Image.Image:
+    """mask_dilate_px: 마스크 팽창 반경(픽셀). 핸드폰·가방·신발 등 인물 인접 악세사리 포함."""
+    if config is None:
+        config = PixelArtConfig()
+    return _stylizer_to_pixel_art(
+        image, mask, stylizer, config, background, mask_dilate_px,
+        fill_color=(220, 220, 220),
+    )
+
+
+def pixel_art_person_anime(
+    image: Image.Image,
+    mask: np.ndarray,
+    stylizer: AnimeStylizer,
+    config: PixelArtConfig | None = None,
+    background: str = "white",
+    mask_dilate_px: int = 12,
+) -> Image.Image:
+    """AnimeGAN2 일러스트 변환 → 픽셀아트."""
+    if config is None:
+        config = ANIME_PIXELART_DEFAULTS
+    return _stylizer_to_pixel_art(
+        image, mask, stylizer, config, background, mask_dilate_px,
+        fill_color=(255, 255, 255),
+    )
