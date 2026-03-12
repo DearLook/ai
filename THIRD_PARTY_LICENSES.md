@@ -124,20 +124,22 @@ This document tracks model provenance, license, version, and commercial-use stat
 - Notes:
   - `src/models/segmentation.py`에서 로드
 
-### 4) Character LoRA (target model)
+### 4) PixelArtRedmond LoRA (artificialguybr/PixelArtRedmond)
 
-- Component: `Character LoRA (character_v1)`
-- Local path: `models/character_lora/character_v1.safetensors`
-- Upstream/source: `internal training run`
-- Version: `character_v1`
-- License: `INTERNAL_TBD`
-- License URL: `TBD`
-- Commercial-use status: `TBD`
-- Approval status: `Not approved for production (until metadata finalized)`
-- SHA256: `TBD (fill after training)`
+- Component: `Pixel Art LoRA (PixelArtRedmond-Lite64)`
+- Local path: `models/character_lora/PixelArtRedmond-Lite64.safetensors`
+- Upstream: `artificialguybr/PixelArtRedmond`
+- Upstream URL: https://huggingface.co/artificialguybr/PixelArtRedmond
+- Version: `Lite64`
+- License: `creativeml-openrail-m`
+- License URL: https://huggingface.co/spaces/CompVis/stable-diffusion-license
+- Commercial-use status: `Allowed (OpenRAIL-M permits commercial use with responsible use guidelines)`
+- Trigger word: `Pixel Art, PixArFK`
+- SHA256: `(run scripts/download_lora.py to obtain)`
 - Notes:
-  - This LoRA is disabled automatically when strict-mode metadata conditions are not fully satisfied.
-  - Enable LoRA in production only after license/provenance is verified and recorded.
+  - 픽셀아트 전용 대규모 데이터셋 학습, SDXL 1.0 호환
+  - 다운로드: `python scripts/download_lora.py`
+  - OpenRAIL-M 금지 용도: 불법 콘텐츠, 허위 정보, 개인 정보 침해 등 — 서비스 이용 약관에 반영 필요
 
 ## Runtime License Guard
 
