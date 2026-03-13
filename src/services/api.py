@@ -17,10 +17,12 @@ if PROJECT_ROOT not in sys.path:
 from src.models.segmentation import PersonSegmenter
 from src.models.cartoon_stylizer import CartoonStylizer, CartoonConfig
 from src.models.anime_stylizer import AnimeStylizer, AnimeConfig
+from src.models.controlnet_stylizer import ControlNetStylizer, ControlNetConfig
 from src.services.pipeline import (
     PixelArtConfig,
     pixel_art_person_cartoon,
     pixel_art_person_anime,
+    pixel_art_person_controlnet,
     resize_mask,
 )
 
@@ -30,6 +32,7 @@ logger = logging.getLogger(__name__)
 _segmenter: PersonSegmenter | None = None
 _cartoon_stylizer: CartoonStylizer | None = None
 _anime_stylizer: AnimeStylizer | None = None
+_controlnet_stylizer: ControlNetStylizer | None = None
 
 _JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = asyncio.Lock()
@@ -37,6 +40,7 @@ _TASKS: set[asyncio.Task] = set()
 _segmenter_lock = threading.Lock()
 _stylizer_lock = threading.Lock()
 _anime_lock = threading.Lock()
+_controlnet_lock = threading.Lock()
 
 _VALID_BACKGROUNDS = ("transparent", "white", "original")
 
@@ -86,6 +90,16 @@ def get_cartoon_stylizer() -> CartoonStylizer:
     return _cartoon_stylizer
 
 
+def get_controlnet_stylizer() -> ControlNetStylizer:
+    global _controlnet_stylizer
+    with _controlnet_lock:
+        if _controlnet_stylizer is None:
+            from src.config.settings import settings
+            device = settings.PIXELART_DEVICE.lower()
+            _controlnet_stylizer = ControlNetStylizer(ControlNetConfig(device=device))
+    return _controlnet_stylizer
+
+
 def get_anime_stylizer() -> AnimeStylizer:
     global _anime_stylizer
     with _anime_lock:
@@ -109,9 +123,9 @@ def _pixelate_sync(content: bytes, params: dict[str, Any]) -> tuple[bytes, dict[
     config = PixelArtConfig(target_long_edge=long_edge, palette_size=palette)
 
     if style == "character":
-        stylizer = get_anime_stylizer()
-        out = pixel_art_person_anime(image, mask, stylizer, config, background=background)
-        mode = "anime_pixelart"
+        stylizer = get_controlnet_stylizer()
+        out = pixel_art_person_controlnet(image, mask, stylizer, background=background)
+        mode = "controlnet_pixelart"
     else:
         stylizer = get_cartoon_stylizer()
         out = pixel_art_person_cartoon(image, mask, stylizer, config, background=background)
