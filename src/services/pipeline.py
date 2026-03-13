@@ -7,9 +7,13 @@ import numpy as np
 from PIL import Image, ImageEnhance
 from scipy.ndimage import binary_dilation
 
+import torch
+from pixeloe.torch.pixelize import pixelize
+
 if TYPE_CHECKING:
     from src.models.cartoon_stylizer import CartoonStylizer
     from src.models.anime_stylizer import AnimeStylizer
+    from src.models.controlnet_stylizer import ControlNetStylizer
 
 
 @dataclass
@@ -26,12 +30,11 @@ class PixelArtConfig:
 
 
 ANIME_PIXELART_DEFAULTS = PixelArtConfig(
-    target_long_edge=112,
-    palette_size=20,
-    outline=True,
-    edge_threshold=0.07,
-    color_boost=1.3,
-    contrast_boost=1.15,
+    target_long_edge=128,
+    palette_size=48,
+    outline=False,
+    color_boost=1.2,
+    contrast_boost=1.1,
 )
 
 def resize_mask(mask: np.ndarray, size: tuple[int, int]) -> np.ndarray:
@@ -149,6 +152,47 @@ def _stylizer_to_pixel_art(
     return canvas
 
 
+def pixel_art_person_controlnet(
+    image: Image.Image,
+    mask: np.ndarray,
+    stylizer: "ControlNetStylizer",
+    background: str = "white",
+    mask_dilate_px: int = 4,
+    mask_threshold: float = 0.5,
+    pixel_target: int = 128,
+    palette_size: int = 32,
+) -> Image.Image:
+    """ControlNet + SD1.5 + LoRA 픽셀아트 변환 후 pixeloe 마무리."""
+    binary = mask >= mask_threshold
+    if mask_dilate_px > 0:
+        struct = np.ones((mask_dilate_px * 2 + 1, mask_dilate_px * 2 + 1), dtype=bool)
+        binary = binary_dilation(binary, structure=struct)
+
+    w, h = image.size
+    x0, y0, x1, y1 = _mask_to_bbox(binary, threshold=mask_threshold)
+    crop_img = image.crop((x0, y0, x1, y1)).convert("RGB")
+    m_crop = binary[y0:y1, x0:x1]
+
+    bg = Image.new("RGB", crop_img.size, (255, 255, 255))
+    mask_pil = Image.fromarray((m_crop * 255).astype(np.uint8), mode="L")
+    bg.paste(crop_img, mask=mask_pil)
+
+    styled = stylizer.apply(bg)
+
+    config = PixelArtConfig(target_long_edge=pixel_target, palette_size=palette_size)
+    pixeled = _pixel_art_pixeloe(styled, config)
+    styled_masked = apply_alpha(pixeled, m_crop.astype(np.float32))
+
+    if background == "original":
+        canvas = image.convert("RGBA")
+        canvas.paste(styled_masked, (x0, y0), styled_masked)
+    else:
+        canvas_color = (255, 255, 255, 255) if background == "white" else (0, 0, 0, 0)
+        canvas = Image.new("RGBA", (w, h), canvas_color)
+        canvas.paste(styled_masked, (x0, y0), styled_masked)
+
+    return canvas
+
 def pixel_art_person_cartoon(
     image: Image.Image,
     mask: np.ndarray,
@@ -166,18 +210,83 @@ def pixel_art_person_cartoon(
     )
 
 
+def _pixel_art_pixeloe(image: Image.Image, config: PixelArtConfig) -> Image.Image:
+    """pixeloe 기반 픽셀아트 변환 — 엣지 인식, 깔끔한 캐릭터 스프라이트 스타일."""
+
+    original_size = image.size
+    w, h = original_size
+    pixel_size = max(4, max(w, h) // config.target_long_edge)
+
+    # pixeloe 내부 다운스케일(pixel_size) 후 wavelet radius(32) 보장
+    min_w = pixel_size * 64
+    min_h = pixel_size * 64
+    if w < min_w or h < min_h:
+        image = image.resize((max(w, min_w), max(h, min_h)), Image.BILINEAR)
+
+    arr = np.array(image.convert("RGB")).astype(np.float32) / 255.0
+    img_t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+
+    result_t = pixelize(
+        img_t,
+        pixel_size=pixel_size,
+        thickness=2,
+        mode="contrast",
+        do_color_match=False,
+        do_quant=True,
+        num_colors=config.palette_size,
+    )
+    result_arr = (result_t.squeeze(0).permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
+    # 원본 crop 크기로 복원
+    return Image.fromarray(result_arr).resize(original_size, Image.NEAREST).convert("RGBA")
+
+
 def pixel_art_person_anime(
     image: Image.Image,
     mask: np.ndarray,
     stylizer: AnimeStylizer,
     config: PixelArtConfig | None = None,
     background: str = "white",
-    mask_dilate_px: int = 12,
+    mask_dilate_px: int = 4,
 ) -> Image.Image:
-    """AnimeGAN2 일러스트 변환 → 픽셀아트."""
+    """AnimeGAN2 일러스트 변환 → pixeloe 픽셀아트."""
     if config is None:
         config = ANIME_PIXELART_DEFAULTS
-    return _stylizer_to_pixel_art(
-        image, mask, stylizer, config, background, mask_dilate_px,
-        fill_color=(255, 255, 255),
-    )
+
+    binary = mask >= config.mask_threshold
+    if mask_dilate_px > 0:
+        struct = np.ones((mask_dilate_px * 2 + 1, mask_dilate_px * 2 + 1), dtype=bool)
+        binary = binary_dilation(binary, structure=struct)
+
+    w, h = image.size
+    x0, y0, x1, y1 = _mask_to_bbox(binary, threshold=config.mask_threshold)
+    crop_img = image.crop((x0, y0, x1, y1)).convert("RGB")
+    m_crop = binary[y0:y1, x0:x1]
+
+    bg = Image.new("RGB", crop_img.size, (255, 255, 255))
+    mask_pil = Image.fromarray((m_crop * 255).astype(np.uint8), mode="L")
+    bg.paste(crop_img, mask=mask_pil)
+
+    if config.color_boost != 1.0:
+        bg = ImageEnhance.Color(bg).enhance(config.color_boost)
+    if config.contrast_boost != 1.0:
+        bg = ImageEnhance.Contrast(bg).enhance(config.contrast_boost)
+
+    styled = stylizer.apply(bg)
+
+    # 스타일 후 색상 강화 — 일러스트 느낌을 위해 채도/밝기 보정
+    styled = ImageEnhance.Color(styled).enhance(1.5)
+    styled = ImageEnhance.Brightness(styled).enhance(1.2)
+    styled = ImageEnhance.Contrast(styled).enhance(1.1)
+
+    pixeled = _pixel_art_pixeloe(styled, config)
+    styled_masked = apply_alpha(pixeled, m_crop.astype(np.float32))
+
+    if background == "original":
+        canvas = image.convert("RGBA")
+        canvas.paste(styled_masked, (x0, y0), styled_masked)
+    else:
+        canvas_color = (255, 255, 255, 255) if background == "white" else (0, 0, 0, 0)
+        canvas = Image.new("RGBA", (w, h), canvas_color)
+        canvas.paste(styled_masked, (x0, y0), styled_masked)
+
+    return canvas
