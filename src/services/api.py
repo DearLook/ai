@@ -124,7 +124,12 @@ def _pixelate_sync(content: bytes, params: dict[str, Any]) -> tuple[bytes, dict[
 
     if style == "character":
         stylizer = get_controlnet_stylizer()
-        out = pixel_art_person_controlnet(image, mask, stylizer, background=background)
+        out = pixel_art_person_controlnet(
+            image, mask, stylizer,
+            background=background,
+            pixel_target=long_edge,
+            palette_size=palette
+            )
         mode = "controlnet_pixelart"
     else:
         stylizer = get_cartoon_stylizer()

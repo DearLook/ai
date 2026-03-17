@@ -1,18 +1,7 @@
-"""
-ControlNet + SD 1.5 + Pixel Art LoRA 스타일라이저.
-
-파이프라인:
-  1. SoftEdge 전처리기로 원본 사진의 윤곽선(포즈·악세사리) 추출
-  2. ControlNet SD 1.5 img2img로 픽셀아트 캐릭터 생성
-  3. Pixel Art LoRA(zenafey/pixel_f2)로 스프라이트 스타일 적용
-"""
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
-
-import numpy as np
 import torch
 from PIL import Image
 
@@ -51,7 +40,6 @@ class ControlNetConfig:
 
 
 class ControlNetStylizer:
-    """SoftEdge ControlNet + SD1.5 + pixel_f2 LoRA로 픽셀아트 캐릭터 변환."""
 
     def __init__(self, config: ControlNetConfig) -> None:
         from controlnet_aux import PidiNetDetector
@@ -71,9 +59,10 @@ class ControlNetStylizer:
             safety_checker=None,
             requires_safety_checker=False,
         )
-        if os.path.exists(config.lora_path):
-            self.pipe.load_lora_weights(config.lora_path)
-            self.pipe.fuse_lora(lora_scale=config.lora_scale)
+        if not os.path.exists(config.lora_path):
+            raise FileNotFoundError("Required pixel_f2 LoRA weights are missing")
+        self.pipe.load_lora_weights(config.lora_path)
+        self.pipe.fuse_lora(lora_scale=config.lora_scale)
 
         self.pipe.to(self._device)
         self.pipe.enable_attention_slicing()
@@ -92,7 +81,6 @@ class ControlNetStylizer:
         scale = min(1.0, self.config.max_size / max(w, h))
         nw = int(w * scale)
         nh = int(h * scale)
-        # SD 1.5 는 64의 배수 필요
         nw = max(64, (nw // 64) * 64)
         nh = max(64, (nh // 64) * 64)
         return image.resize((nw, nh), Image.BILINEAR)
@@ -100,7 +88,6 @@ class ControlNetStylizer:
     def apply(self, image: Image.Image) -> Image.Image:
         img = self._resize(image.convert("RGB"))
 
-        # SoftEdge 윤곽선 추출 — 반드시 img와 동일한 크기로
         control_image = self.preprocessor(img, detect_resolution=min(img.size), image_resolution=min(img.size))
         control_image = control_image.resize(img.size, Image.BILINEAR)
 
