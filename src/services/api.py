@@ -43,6 +43,7 @@ _segmenter_lock = threading.Lock()
 _stylizer_lock = threading.Lock()
 _anime_lock = threading.Lock()
 _controlnet_lock = threading.Lock()
+_controlnet_infer_lock = threading.Lock()
 
 _VALID_BACKGROUNDS = ("transparent", "white", "original")
 
@@ -138,12 +139,13 @@ def _pixelate_sync(content: bytes, params: dict[str, Any]) -> tuple[bytes, dict[
 
     if style == "character":
         stylizer = get_controlnet_stylizer()
-        out = pixel_art_person_controlnet(
-            image, mask, stylizer,
-            background=background,
-            pixel_target=long_edge,
-            palette_size=palette
-            )
+        with _controlnet_infer_lock:
+            out = pixel_art_person_controlnet(
+                image, mask, stylizer,
+                background=background,
+                pixel_target=long_edge,
+                palette_size=palette
+                )
         mode = "controlnet_pixelart"
     else:
         stylizer = get_cartoon_stylizer()
