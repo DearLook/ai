@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-import io, os, sys, time
-from typing import Any
-
-import asyncio, uuid
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import Response
+from src.config.settings import settings
+
+import io, os, sys, time
+from typing import Any
+import asyncio, uuid
 from PIL import Image
 import threading
 import logging
+import torch
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if PROJECT_ROOT not in sys.path:
@@ -94,9 +96,21 @@ def get_controlnet_stylizer() -> ControlNetStylizer:
     global _controlnet_stylizer
     with _controlnet_lock:
         if _controlnet_stylizer is None:
-            from src.config.settings import settings
-            device = settings.PIXELART_DEVICE.lower()
-            _controlnet_stylizer = ControlNetStylizer(ControlNetConfig(device=device))
+            _dtype_map = {"fp16": torch.float16, "bf16": torch.bfloat16}
+            torch_dtype = _dtype_map.get(settings.PIXELART_DTYPE.lower(), torch.float32)
+            _controlnet_stylizer = ControlNetStylizer(ControlNetConfig(
+                lora_path=settings.PIXELART_LORA_PATH,
+                prompt=settings.PIXELART_PROMPT,
+                negative_prompt=settings.PIXELART_NEGATIVE_PROMPT,
+                num_inference_steps=settings.PIXELART_STEPS,
+                guidance_scale=settings.PIXELART_GUIDANCE,
+                strength=settings.PIXELART_STRENGTH,
+                max_size=settings.PIXELART_MAX_SIZE,
+                lora_scale=settings.PIXELART_LORA_SCALE,
+                seed=settings.PIXELART_SEED,
+                device=settings.PIXELART_DEVICE.lower(),
+                torch_dtype=torch_dtype,
+            ))
     return _controlnet_stylizer
 
 

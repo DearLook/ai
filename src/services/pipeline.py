@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
+from _collections_abc import Callable
 
 import numpy as np
 from PIL import Image, ImageEnhance
@@ -183,7 +184,7 @@ def _person_pipeline(
 def pixel_art_person_controlnet(
     image: Image.Image,
     mask: np.ndarray,
-    stylizer: "ControlNetStylizer",
+    stylizer: ControlNetStylizer,
     background: str = "white",
     mask_dilate_px: int = 4,
     mask_threshold: float = 0.5,
@@ -206,7 +207,7 @@ def pixel_art_person_controlnet(
 def pixel_art_person_anime(
     image: Image.Image,
     mask: np.ndarray,
-    stylizer: "AnimeStylizer",
+    stylizer: AnimeStylizer,
     config: PixelArtConfig | None = None,
     background: str = "white",
     mask_dilate_px: int = 4,
@@ -240,7 +241,7 @@ def pixel_art_person_anime(
 def pixel_art_person_cartoon(
     image: Image.Image,
     mask: np.ndarray,
-    stylizer: "CartoonStylizer",
+    stylizer: CartoonStylizer,
     config: PixelArtConfig | None = None,
     background: str = "white",
     mask_dilate_px: int = 12,
