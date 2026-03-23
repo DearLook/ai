@@ -180,6 +180,58 @@ def _person_pipeline(
     return canvas
 
 
+def _color_transfer(source: Image.Image, target: Image.Image) -> Image.Image:
+    """원본(source) 색감을 타겟(target)에 이식 (LAB 통계 전이)."""
+    src = np.array(source.convert("RGB")).astype(np.float32)
+    tgt = np.array(target.convert("RGB")).astype(np.float32)
+
+    def rgb_to_lab(img):
+        img = img / 255.0
+        mask = img > 0.04045
+        img = np.where(mask, ((img + 0.055) / 1.055) ** 2.4, img / 12.92)
+        m = np.array([[0.4124, 0.3576, 0.1805],
+                    [0.2126, 0.7152, 0.0722],
+                    [0.0193, 0.1192, 0.9505]])
+        xyz = img @ m.T
+        xyz /= [0.95047, 1.00000, 1.08883]
+        eps = 0.008856
+        xyz = np.where(xyz > eps, xyz ** (1/3), 7.787 * xyz + 16/116)
+        L = 116 * xyz[..., 1] - 16
+        a = 500 * (xyz[..., 0] - xyz[..., 1])
+        b = 200 * (xyz[..., 1] - xyz[..., 2])
+        return np.stack([L, a, b], axis=-1)
+
+    def lab_to_rgb(lab):
+        L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
+        fy = (L + 16) / 116
+        fx = a / 500 + fy
+        fz = fy - b / 200
+        xyz = np.stack([fx, fy, fz], axis=-1)
+        eps = 0.008856
+        xyz = np.where(xyz ** 3 > eps, xyz ** 3, (xyz - 16/116) / 7.787)
+        xyz *= [0.95047, 1.00000, 1.08883]
+        m_inv = np.array([[ 3.2406, -1.5372, -0.4986],
+                        [-0.9689,  1.8758,  0.0415],
+                        [ 0.0557, -0.2040,  1.0570]])
+        rgb = xyz @ m_inv.T
+        rgb = np.clip(rgb, 0, 1)
+        mask = rgb > 0.0031308
+        rgb = np.where(mask, 1.055 * rgb ** (1/2.4) - 0.055, 12.92 * rgb)
+        return (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
+
+    src_lab = rgb_to_lab(src)
+    tgt_lab = rgb_to_lab(tgt)
+
+    for ch in range(3):
+        s_mean, s_std = src_lab[..., ch].mean(), src_lab[..., ch].std() + 1e-6
+        t_mean, t_std = tgt_lab[..., ch].mean(), tgt_lab[..., ch].std() + 1e-6
+        tgt_lab[..., ch] = (tgt_lab[..., ch] - t_mean) * (s_std / t_std) + s_mean
+
+    result_rgb = lab_to_rgb(tgt_lab)
+    result = Image.fromarray(result_rgb)
+    return result.resize(target.size, Image.BILINEAR)
+
+
 def pixel_art_person_controlnet(
     image: Image.Image,
     mask: np.ndarray,
@@ -192,14 +244,58 @@ def pixel_art_person_controlnet(
 ) -> Image.Image:
     """ControlNet + SD1.5 + LoRA 픽셀아트 변환 후 pixeloe 마무리."""
     config = PixelArtConfig(target_long_edge=pixel_target, palette_size=palette_size)
+
+    captured_original: list[Image.Image] = []
+
+    def stylize_and_capture(img: Image.Image) -> Image.Image:
+        captured_original.append(img.copy())
+        return stylizer.apply(img)
+
+    def pixelize_with_orig_palette(styled: Image.Image) -> Image.Image:
+        orig = captured_original[0] if captured_original else styled
+        orig_resized = orig.resize(styled.size, Image.BILINEAR).convert("RGB")
+
+        # 원본 이미지에서 팔레트 추출
+        q = orig_resized.quantize(colors=config.palette_size, method=Image.Quantize.MEDIANCUT)
+        raw = q.getpalette()
+        orig_palette = np.array(raw[:config.palette_size * 3]).reshape(-1, 3).astype(np.float32)
+
+        # HSV 기반 팔레트 보정: 색조 유지 + 채도 강화 + 어두운 색만 밝기 보정
+        import colorsys
+        boosted = []
+        for color in orig_palette:
+            r, g, b = color / 255.0
+            h, s, v = colorsys.rgb_to_hsv(r, g, b)
+            s = min(1.0, s * 2.2)       # 채도 강화
+            v = min(1.0, v * 1.4 + 0.08) if v < 0.5 else min(1.0, v * 1.1)  # 어두운 색만 밝기 보정
+            r2, g2, b2 = colorsys.hsv_to_rgb(h, s, v)
+            boosted.append([r2 * 255, g2 * 255, b2 * 255])
+        orig_palette = np.array(boosted, dtype=np.float32)
+
+        # styled 이미지를 pixeloe로 픽셀화
+        pixelized = _pixel_art_pixeloe(styled, config).convert("RGB")
+
+        pix_arr = np.array(pixelized).astype(np.float32)
+        h, w = pix_arr.shape[:2]
+        flat = pix_arr.reshape(-1, 3)
+
+        # 각 픽셀 → 원본 팔레트 최근접 색 매핑
+        dists = np.sum((flat[:, None, :] - orig_palette[None, :, :]) ** 2, axis=2)
+        nearest = np.argmin(dists, axis=1)
+        remapped = orig_palette[nearest].reshape(h, w, 3).clip(0, 255).astype(np.uint8)
+
+        result = Image.fromarray(remapped)
+        result = ImageEnhance.Color(result).enhance(1.2)
+        return result.convert("RGBA")
+
     return _person_pipeline(
         image, mask,
         mask_threshold=mask_threshold,
         mask_dilate_px=mask_dilate_px,
         fill_color=(255, 255, 255),
         background=background,
-        stylize_fn=stylizer.apply,
-        pixelize_fn=lambda img: _pixel_art_pixeloe(img, config),
+        stylize_fn=stylize_and_capture,
+        pixelize_fn=pixelize_with_orig_palette,
     )
 
 
