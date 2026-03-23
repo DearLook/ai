@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     PIXELART_DIFFUSER_MODEL_ID: str = "stabilityai/stable-diffusion-xl-base-1.0"
     PIXELART_DIFFUSER_PATH: str | None = "models/base/sdxl-base-1.0"
     PIXELART_USE_LORA: bool = True
-    PIXELART_LORA_PATH: str = "models/character_lora/character_v1.safetensors"
+    PIXELART_LORA_PATH: str = "models/character_lora/pixel_f2.safetensors"
     PIXELART_LORA_SCALE: float = 1.15
     PIXELART_PROMPT: str = (
         "dearlook_char, full-body pixel-art character illustration, cute anime sprite, "

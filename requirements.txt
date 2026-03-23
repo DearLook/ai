@@ -13,3 +13,5 @@ safetensors
 pydantic-settings
 huggingface_hub
 peft
+pixeloe
+controlnet_aux
