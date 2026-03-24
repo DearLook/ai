@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 import torch
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
 os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
@@ -28,12 +28,12 @@ class ControlNetConfig:
         "faceless, no face, blob face, melted face, "
         "wrong colors, color bleeding, extra colors, unnatural colors"
     )
-    num_inference_steps: int = 35
-    guidance_scale: float = 7.5
-    controlnet_conditioning_scale: float = 0.7
-    strength: float = 0.75
+    num_inference_steps: int = 36
+    guidance_scale: float = 6.0
+    controlnet_conditioning_scale: float = 0.75
+    strength: float = 0.65
     max_size: int = 768
-    lora_scale: float = 0.85
+    lora_scale: float = 0.9
     seed: int = 1234
     device: str = "cpu"
     torch_dtype: torch.dtype = field(default=torch.float32)
@@ -193,6 +193,9 @@ class ControlNetStylizer:
 
     def apply(self, image: Image.Image) -> Image.Image:
         img = self._resize(image.convert("RGB"))
+        # 입력 전 밝기/채도 보정 (어두운 입력이 어두운 결과로 이어지는 것 방지)
+        img = ImageEnhance.Brightness(img).enhance(1.3)
+        img = ImageEnhance.Color(img).enhance(1.3)
 
         control_image = self.preprocessor(img, detect_resolution=min(img.size), image_resolution=min(img.size))
         control_image = control_image.resize(img.size, Image.BILINEAR)
