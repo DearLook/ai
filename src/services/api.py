@@ -38,8 +38,9 @@ _TASKS: set[asyncio.Task] = set()
 _segmenter_lock = threading.Lock()
 _stylizer_lock = threading.Lock()
 _controlnet_lock = threading.Lock()
-
 _VALID_BACKGROUNDS = ("transparent", "white", "original")
+DEFAULT_PIXEL_LONG_EDGE = 192
+DEFAULT_PIXEL_PALETTE = 48
 
 
 def _now_ms() -> int:
@@ -236,8 +237,8 @@ async def pixelate_person(
     file: UploadFile = File(...),
     background: str = Form("white"),
     style: str = Form("character"),
-    long_edge: int = Form(256, ge=32, le=2048),
-    palette: int = Form(64, ge=2, le=256),
+    long_edge: int = Form(DEFAULT_PIXEL_LONG_EDGE, ge=32, le=2048),
+    palette: int = Form(DEFAULT_PIXEL_PALETTE, ge=2, le=256),
 ):
     start = time.time()
 
@@ -274,8 +275,8 @@ async def pixelate_person_async(
     file: UploadFile = File(...),
     background: str = Form("white"),
     style: str = Form("character"),
-    long_edge: int = Form(192, ge=32, le=2048),
-    palette: int = Form(48, ge=2, le=256),
+    long_edge: int = Form(DEFAULT_PIXEL_LONG_EDGE, ge=32, le=2048),
+    palette: int = Form(DEFAULT_PIXEL_PALETTE, ge=2, le=256),
 ):
     if await request.is_disconnected():
         raise HTTPException(status_code=499, detail="client_disconnected")
