@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 import numpy as np
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageFilter
 from scipy.ndimage import binary_dilation
 
 import torch
@@ -45,10 +45,9 @@ def resize_mask(mask: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     return np.array(pil, dtype=np.float32) / 255.0
 
 
-def keep_largest_component(mask: np.ndarray) -> np.ndarray:
-    """마스크에서 가장 큰 연결 영역만 남기고 나머지 작은 조각을 제거합니다."""
+def keep_largest_component(mask: np.ndarray, threshold: float = 0.5) -> np.ndarray:
     from scipy.ndimage import label
-    binary = mask > 0.5
+    binary = mask > threshold
     labeled, num_features = label(binary)
     if num_features <= 1:
         return mask
@@ -85,7 +84,6 @@ def _mask_to_bbox(
     pad: int = 6,
     bottom_pad: int = 20,
 ) -> tuple[int, int, int, int]:
-    """bbox 추출. bottom_pad를 더 크게 주어 신발 등 하단 악세사리를 포함."""
     h, w = mask.shape
     ys, xs = np.where(mask >= threshold)
     if xs.size == 0 or ys.size == 0:
@@ -127,12 +125,10 @@ def _pixel_art(image: Image.Image, config: PixelArtConfig) -> Image.Image:
 
 
 def _pixel_art_pixeloe(image: Image.Image, config: PixelArtConfig) -> Image.Image:
-    """pixeloe 기반 픽셀아트 변환 — 엣지 인식, 깔끔한 캐릭터 스프라이트 스타일."""
     original_size = image.size
     w, h = original_size
     pixel_size = max(4, max(w, h) // config.target_long_edge)
 
-    # pixeloe 내부 다운스케일(pixel_size) 후 wavelet radius(32) 보장
     min_w = pixel_size * 64
     min_h = pixel_size * 64
     if w < min_w or h < min_h:
@@ -164,7 +160,6 @@ def _person_pipeline(
     stylize_fn: Callable[[Image.Image], Image.Image],
     pixelize_fn: Callable[[Image.Image], Image.Image],
 ) -> Image.Image:
-    """공통 파이프라인: dilation → bbox crop → 흰 배경 합성 → stylize → pixelize → alpha 합성 → canvas."""
     binary_orig = mask >= mask_threshold  # alpha에 사용할 원본 마스크
     binary = binary_orig.copy()
     if mask_dilate_px > 0:
@@ -215,7 +210,6 @@ def _person_pipeline(
 
 
 def _color_transfer(source: Image.Image, target: Image.Image) -> Image.Image:
-    """원본(source) 색감을 타겟(target)에 이식 (LAB 통계 전이)."""
     src = np.array(source.convert("RGB")).astype(np.float32)
     tgt = np.array(target.convert("RGB")).astype(np.float32)
 
@@ -276,7 +270,6 @@ def pixel_art_person_controlnet(
     pixel_target: int = 128,
     palette_size: int = 32,
 ) -> Image.Image:
-    """ControlNet + SD1.5 + LoRA 픽셀아트 변환 후 pixeloe 마무리."""
     config = PixelArtConfig(target_long_edge=pixel_target, palette_size=palette_size)
 
     captured_original: list[Image.Image] = []
@@ -291,7 +284,7 @@ def pixel_art_person_controlnet(
         orig_resized = orig.resize(styled.size, Image.BILINEAR).convert("RGB")
 
         # 팔레트 추출 전 median blur로 잡색 제거
-        palette_src = orig_resized.filter(__import__("PIL.ImageFilter", fromlist=["MedianFilter"]).MedianFilter(size=3))
+        palette_src = orig_resized.filter(ImageFilter.MedianFilter(size=3))
         q = palette_src.quantize(colors=config.palette_size, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
         raw = q.getpalette()
         orig_palette = np.array(raw[:config.palette_size * 3]).reshape(-1, 3).astype(np.float32)
@@ -350,7 +343,6 @@ def pixel_art_person_anime(
     background: str = "white",
     mask_dilate_px: int = 4,
 ) -> Image.Image:
-    """AnimeGAN2 일러스트 변환 → pixeloe 픽셀아트."""
     if config is None:
         config = ANIME_PIXELART_DEFAULTS
 
@@ -384,7 +376,6 @@ def pixel_art_person_cartoon(
     background: str = "white",
     mask_dilate_px: int = 12,
 ) -> Image.Image:
-    """mask_dilate_px: 마스크 팽창 반경(픽셀). 핸드폰·가방·신발 등 인물 인접 악세사리 포함."""
     if config is None:
         config = PixelArtConfig()
     return _person_pipeline(

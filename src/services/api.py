@@ -184,52 +184,6 @@ async def _run_pixelate_job(job_id: str, content: bytes, params: dict[str, Any])
                 j["updated_ms"] = _now_ms()
 
 
-@app.post("/pixelate/async")
-async def pixelate_person_async(
-    request: Request,
-    file: UploadFile = File(...),
-    background: str = Form("white"),
-    style: str = Form("character"),
-    long_edge: int = Form(256, ge=32, le=2048),
-    palette: int = Form(64, ge=2, le=256),
-):
-    if await request.is_disconnected():
-        raise HTTPException(status_code=499, detail="client_disconnected")
-
-    try:
-        background = _normalize_background(background)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    content = await file.read()
-    job_id = uuid.uuid4().hex
-    job = {
-        "job_id": job_id,
-        "status": "QUEUED",
-        "created_ms": _now_ms(),
-        "updated_ms": _now_ms(),
-        "cancelled": False,
-        "result_png": None,
-        "error": None,
-        "meta": {},
-    }
-
-    async with _JOBS_LOCK:
-        _JOBS[job_id] = job
-
-    params = {"background": background, "style": style, "long_edge": long_edge, "palette": palette}
-    task = asyncio.create_task(_run_pixelate_job(job_id, content, params))
-    _TASKS.add(task)
-    task.add_done_callback(_TASKS.discard)
-
-    async with _JOBS_LOCK:
-        j = _JOBS.get(job_id)
-        if j is not None:
-            j["task"] = task
-
-    return {"job_id": job_id, "status": "QUEUED"}
-
-
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str):
     async with _JOBS_LOCK:
@@ -312,3 +266,49 @@ async def pixelate_person(
         media_type="image/png",
         headers={"X-Elapsed-Ms": str(elapsed_ms)},
     )
+
+
+@app.post("/pixelate/async")
+async def pixelate_person_async(
+    request: Request,
+    file: UploadFile = File(...),
+    background: str = Form("white"),
+    style: str = Form("character"),
+    long_edge: int = Form(192, ge=32, le=2048),
+    palette: int = Form(48, ge=2, le=256),
+):
+    if await request.is_disconnected():
+        raise HTTPException(status_code=499, detail="client_disconnected")
+
+    try:
+        background = _normalize_background(background)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    content = await file.read()
+    job_id = uuid.uuid4().hex
+    job = {
+        "job_id": job_id,
+        "status": "QUEUED",
+        "created_ms": _now_ms(),
+        "updated_ms": _now_ms(),
+        "cancelled": False,
+        "result_png": None,
+        "error": None,
+        "meta": {},
+    }
+
+    async with _JOBS_LOCK:
+        _JOBS[job_id] = job
+
+    params = {"background": background, "style": style, "long_edge": long_edge, "palette": palette}
+    task = asyncio.create_task(_run_pixelate_job(job_id, content, params))
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
+
+    async with _JOBS_LOCK:
+        j = _JOBS.get(job_id)
+        if j is not None:
+            j["task"] = task
+
+    return {"job_id": job_id, "status": "QUEUED"}
