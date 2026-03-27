@@ -54,6 +54,22 @@ def _normalize_background(bg: str) -> str:
     return b
 
 
+async def _validate_pixelate_request(
+    request: Request,
+    background: str,
+    style: str,
+    long_edge: int,
+    palette: int,
+) -> dict[str, Any]:
+    if await request.is_disconnected():
+        raise HTTPException(status_code=499, detail="client_disconnected")
+    try:
+        bg = _normalize_background(background)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"background": bg, "style": style, "long_edge": long_edge, "palette": palette}
+
+
 def _job_public(job: dict[str, Any]) -> dict[str, Any]:
     return {
         "job_id": job["job_id"],
@@ -241,22 +257,10 @@ async def pixelate_person(
     palette: int = Form(DEFAULT_PIXEL_PALETTE, ge=2, le=256),
 ):
     start = time.time()
-
-    if await request.is_disconnected():
-        raise HTTPException(status_code=499, detail="client_disconnected")
-
-    try:
-        background = _normalize_background(background)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
+    params = await _validate_pixelate_request(request, background, style, long_edge, palette)
     content = await file.read()
     try:
-        png_bytes, _ = await _run_blocking(
-            _pixelate_sync,
-            content,
-            {"background": background, "style": style, "long_edge": long_edge, "palette": palette}
-        )
+        png_bytes, _ = await _run_blocking(_pixelate_sync, content, params)
     except Exception as exc:
         logger.exception("pixelate sync failed")
         raise HTTPException(status_code=500, detail="pixelate_failed") from exc
@@ -278,14 +282,7 @@ async def pixelate_person_async(
     long_edge: int = Form(DEFAULT_PIXEL_LONG_EDGE, ge=32, le=2048),
     palette: int = Form(DEFAULT_PIXEL_PALETTE, ge=2, le=256),
 ):
-    if await request.is_disconnected():
-        raise HTTPException(status_code=499, detail="client_disconnected")
-
-    try:
-        background = _normalize_background(background)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
+    params = await _validate_pixelate_request(request, background, style, long_edge, palette)
     content = await file.read()
     job_id = uuid.uuid4().hex
     job = {
@@ -302,7 +299,6 @@ async def pixelate_person_async(
     async with _JOBS_LOCK:
         _JOBS[job_id] = job
 
-    params = {"background": background, "style": style, "long_edge": long_edge, "palette": palette}
     task = asyncio.create_task(_run_pixelate_job(job_id, content, params))
     _TASKS.add(task)
     task.add_done_callback(_TASKS.discard)
