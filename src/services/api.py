@@ -34,6 +34,7 @@ _controlnet_stylizer: ControlNetStylizer | None = None
 
 _JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = asyncio.Lock()
+JOB_RETENTION_MS = 10 * 60 * 1000
 _TASKS: set[asyncio.Task] = set()
 _segmenter_lock = threading.Lock()
 _stylizer_lock = threading.Lock()
@@ -290,6 +291,7 @@ async def pixelate_person_async(
         "status": "QUEUED",
         "created_ms": _now_ms(),
         "updated_ms": _now_ms(),
+        "expires_ms": _now_ms() + JOB_RETENTION_MS,
         "cancelled": False,
         "result_png": None,
         "error": None,
@@ -297,6 +299,13 @@ async def pixelate_person_async(
     }
 
     async with _JOBS_LOCK:
+        now = _now_ms()
+        for stale_id, stale in list(_JOBS.items()):
+            if (
+                stale["status"] in {"SUCCEEDED", "FAILED", "CANCELLED"}
+                and stale.get("update_ms", 0) + JOB_RETENTION_MS <= now
+                ): 
+                    _JOBS.pop(stale_id, None)
         _JOBS[job_id] = job
 
     task = asyncio.create_task(_run_pixelate_job(job_id, content, params))
