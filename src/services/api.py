@@ -16,14 +16,13 @@ if PROJECT_ROOT not in sys.path:
 
 from src.models.segmentation import PersonSegmenter
 from src.models.cartoon_stylizer import CartoonStylizer, CartoonConfig
-from src.models.anime_stylizer import AnimeStylizer, AnimeConfig
 from src.models.controlnet_stylizer import ControlNetStylizer, ControlNetConfig
 from src.services.pipeline import (
     PixelArtConfig,
     pixel_art_person_cartoon,
-    pixel_art_person_anime,
     pixel_art_person_controlnet,
     resize_mask,
+    keep_largest_component,
 )
 
 app = FastAPI(title="DearLook AI")
@@ -31,18 +30,18 @@ logger = logging.getLogger(__name__)
 
 _segmenter: PersonSegmenter | None = None
 _cartoon_stylizer: CartoonStylizer | None = None
-_anime_stylizer: AnimeStylizer | None = None
 _controlnet_stylizer: ControlNetStylizer | None = None
 
 _JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = asyncio.Lock()
+JOB_RETENTION_MS = 10 * 60 * 1000
 _TASKS: set[asyncio.Task] = set()
 _segmenter_lock = threading.Lock()
 _stylizer_lock = threading.Lock()
-_anime_lock = threading.Lock()
 _controlnet_lock = threading.Lock()
-
 _VALID_BACKGROUNDS = ("transparent", "white", "original")
+DEFAULT_PIXEL_LONG_EDGE = 192
+DEFAULT_PIXEL_PALETTE = 48
 
 
 def _now_ms() -> int:
@@ -54,6 +53,22 @@ def _normalize_background(bg: str) -> str:
     if b not in _VALID_BACKGROUNDS:
         raise ValueError(f"background must be one of: {', '.join(_VALID_BACKGROUNDS)}")
     return b
+
+
+async def _validate_pixelate_request(
+    request: Request,
+    background: str,
+    style: str,
+    long_edge: int,
+    palette: int,
+) -> dict[str, Any]:
+    if await request.is_disconnected():
+        raise HTTPException(status_code=499, detail="client_disconnected")
+    try:
+        bg = _normalize_background(background)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"background": bg, "style": style, "long_edge": long_edge, "palette": palette}
 
 
 def _job_public(job: dict[str, Any]) -> dict[str, Any]:
@@ -100,26 +115,17 @@ def get_controlnet_stylizer() -> ControlNetStylizer:
     return _controlnet_stylizer
 
 
-def get_anime_stylizer() -> AnimeStylizer:
-    global _anime_stylizer
-    with _anime_lock:
-        if _anime_stylizer is None:
-            from src.config.settings import settings
-            device = settings.PIXELART_DEVICE.lower()
-            _anime_stylizer = AnimeStylizer(AnimeConfig(device=device))
-    return _anime_stylizer
-
-
 def _pixelate_sync(content: bytes, params: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
     image = Image.open(io.BytesIO(content)).convert("RGB")
     segmenter = get_segmenter()
     mask = segmenter.predict_mask(image)
     mask = resize_mask(mask, image.size)
+    mask = keep_largest_component(mask)
 
     background = _normalize_background(str(params.get("background", "white")))
     style = str(params.get("style", "character"))
-    long_edge = int(params.get("long_edge", 256))
-    palette = int(params.get("palette", 64))
+    long_edge = int(params.get("long_edge", DEFAULT_PIXEL_LONG_EDGE))
+    palette = int(params.get("palette", DEFAULT_PIXEL_PALETTE))
     config = PixelArtConfig(target_long_edge=long_edge, palette_size=palette)
 
     if style == "character":
@@ -128,8 +134,8 @@ def _pixelate_sync(content: bytes, params: dict[str, Any]) -> tuple[bytes, dict[
             image, mask, stylizer,
             background=background,
             pixel_target=long_edge,
-            palette_size=palette
-            )
+            palette_size=palette,
+        )
         mode = "controlnet_pixelart"
     else:
         stylizer = get_cartoon_stylizer()
@@ -196,52 +202,6 @@ async def _run_pixelate_job(job_id: str, content: bytes, params: dict[str, Any])
                 j["updated_ms"] = _now_ms()
 
 
-@app.post("/pixelate/async")
-async def pixelate_person_async(
-    request: Request,
-    file: UploadFile = File(...),
-    background: str = Form("white"),
-    style: str = Form("character"),
-    long_edge: int = Form(256, ge=32, le=2048),
-    palette: int = Form(64, ge=2, le=256),
-):
-    if await request.is_disconnected():
-        raise HTTPException(status_code=499, detail="client_disconnected")
-
-    try:
-        background = _normalize_background(background)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    content = await file.read()
-    job_id = uuid.uuid4().hex
-    job = {
-        "job_id": job_id,
-        "status": "QUEUED",
-        "created_ms": _now_ms(),
-        "updated_ms": _now_ms(),
-        "cancelled": False,
-        "result_png": None,
-        "error": None,
-        "meta": {},
-    }
-
-    async with _JOBS_LOCK:
-        _JOBS[job_id] = job
-
-    params = {"background": background, "style": style, "long_edge": long_edge, "palette": palette}
-    task = asyncio.create_task(_run_pixelate_job(job_id, content, params))
-    _TASKS.add(task)
-    task.add_done_callback(_TASKS.discard)
-
-    async with _JOBS_LOCK:
-        j = _JOBS.get(job_id)
-        if j is not None:
-            j["task"] = task
-
-    return {"job_id": job_id, "status": "QUEUED"}
-
-
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str):
     async with _JOBS_LOCK:
@@ -294,26 +254,14 @@ async def pixelate_person(
     file: UploadFile = File(...),
     background: str = Form("white"),
     style: str = Form("character"),
-    long_edge: int = Form(256, ge=32, le=2048),
-    palette: int = Form(64, ge=2, le=256),
+    long_edge: int = Form(DEFAULT_PIXEL_LONG_EDGE, ge=32, le=2048),
+    palette: int = Form(DEFAULT_PIXEL_PALETTE, ge=2, le=256),
 ):
     start = time.time()
-
-    if await request.is_disconnected():
-        raise HTTPException(status_code=499, detail="client_disconnected")
-
-    try:
-        background = _normalize_background(background)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
+    params = await _validate_pixelate_request(request, background, style, long_edge, palette)
     content = await file.read()
     try:
-        png_bytes, _ = await _run_blocking(
-            _pixelate_sync,
-            content,
-            {"background": background, "style": style, "long_edge": long_edge, "palette": palette}
-        )
+        png_bytes, _ = await _run_blocking(_pixelate_sync, content, params)
     except Exception as exc:
         logger.exception("pixelate sync failed")
         raise HTTPException(status_code=500, detail="pixelate_failed") from exc
@@ -324,3 +272,49 @@ async def pixelate_person(
         media_type="image/png",
         headers={"X-Elapsed-Ms": str(elapsed_ms)},
     )
+
+
+@app.post("/pixelate/async")
+async def pixelate_person_async(
+    request: Request,
+    file: UploadFile = File(...),
+    background: str = Form("white"),
+    style: str = Form("character"),
+    long_edge: int = Form(DEFAULT_PIXEL_LONG_EDGE, ge=32, le=2048),
+    palette: int = Form(DEFAULT_PIXEL_PALETTE, ge=2, le=256),
+):
+    params = await _validate_pixelate_request(request, background, style, long_edge, palette)
+    content = await file.read()
+    job_id = uuid.uuid4().hex
+    job = {
+        "job_id": job_id,
+        "status": "QUEUED",
+        "created_ms": _now_ms(),
+        "updated_ms": _now_ms(),
+        "expires_ms": _now_ms() + JOB_RETENTION_MS,
+        "cancelled": False,
+        "result_png": None,
+        "error": None,
+        "meta": {},
+    }
+
+    async with _JOBS_LOCK:
+        now = _now_ms()
+        for stale_id, stale in list(_JOBS.items()):
+            if (
+                stale["status"] in {"SUCCEEDED", "FAILED", "CANCELLED"}
+                and stale.get("updated_ms", 0) + JOB_RETENTION_MS <= now
+                ): 
+                    _JOBS.pop(stale_id, None)
+        _JOBS[job_id] = job
+
+    task = asyncio.create_task(_run_pixelate_job(job_id, content, params))
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
+
+    async with _JOBS_LOCK:
+        j = _JOBS.get(job_id)
+        if j is not None:
+            j["task"] = task
+
+    return {"job_id": job_id, "status": "QUEUED"}

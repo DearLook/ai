@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 import numpy as np
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageFilter
 from scipy.ndimage import binary_dilation
 
 import torch
@@ -45,6 +45,19 @@ def resize_mask(mask: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     return np.array(pil, dtype=np.float32) / 255.0
 
 
+def keep_largest_component(mask: np.ndarray, threshold: float = 0.5) -> np.ndarray:
+    from scipy.ndimage import label
+    binary = mask > threshold
+    labeled, num_features = label(binary)
+    if num_features <= 1:
+        return mask
+    sizes = np.bincount(labeled.ravel())
+    sizes[0] = 0  # background
+    largest = sizes.argmax()
+    result = np.where(labeled == largest, mask, 0.0)
+    return result.astype(np.float32)
+
+
 def apply_alpha(image: Image.Image, mask: np.ndarray) -> Image.Image:
     rgba = image.convert("RGBA")
     alpha = (np.clip(mask, 0.0, 1.0) * 255).astype(np.uint8)
@@ -71,7 +84,6 @@ def _mask_to_bbox(
     pad: int = 6,
     bottom_pad: int = 20,
 ) -> tuple[int, int, int, int]:
-    """bbox 추출. bottom_pad를 더 크게 주어 신발 등 하단 악세사리를 포함."""
     h, w = mask.shape
     ys, xs = np.where(mask >= threshold)
     if xs.size == 0 or ys.size == 0:
@@ -113,12 +125,10 @@ def _pixel_art(image: Image.Image, config: PixelArtConfig) -> Image.Image:
 
 
 def _pixel_art_pixeloe(image: Image.Image, config: PixelArtConfig) -> Image.Image:
-    """pixeloe 기반 픽셀아트 변환 — 엣지 인식, 깔끔한 캐릭터 스프라이트 스타일."""
     original_size = image.size
     w, h = original_size
     pixel_size = max(4, max(w, h) // config.target_long_edge)
 
-    # pixeloe 내부 다운스케일(pixel_size) 후 wavelet radius(32) 보장
     min_w = pixel_size * 64
     min_h = pixel_size * 64
     if w < min_w or h < min_h:
@@ -150,8 +160,8 @@ def _person_pipeline(
     stylize_fn: Callable[[Image.Image], Image.Image],
     pixelize_fn: Callable[[Image.Image], Image.Image],
 ) -> Image.Image:
-    """공통 파이프라인: dilation → bbox crop → 흰 배경 합성 → stylize → pixelize → alpha 합성 → canvas."""
-    binary = mask >= mask_threshold
+    binary_orig = mask >= mask_threshold  # alpha에 사용할 원본 마스크
+    binary = binary_orig.copy()
     if mask_dilate_px > 0:
         struct = np.ones((mask_dilate_px * 2 + 1, mask_dilate_px * 2 + 1), dtype=bool)
         binary = binary_dilation(binary, structure=struct)
@@ -159,7 +169,8 @@ def _person_pipeline(
     w, h = image.size
     x0, y0, x1, y1 = _mask_to_bbox(binary, threshold=mask_threshold)
     crop_img = image.crop((x0, y0, x1, y1)).convert("RGB")
-    m_crop = binary[y0:y1, x0:x1]
+    m_crop = binary[y0:y1, x0:x1]           # dilation 마스크 (crop/stylize용)
+    m_alpha = binary_orig[y0:y1, x0:x1]     # 원본 마스크 (alpha 합성용)
 
     bg = Image.new("RGB", crop_img.size, fill_color)
     mask_pil = Image.fromarray((m_crop * 255).astype(np.uint8), mode="L")
@@ -167,21 +178,38 @@ def _person_pipeline(
 
     styled = stylize_fn(bg)
     pixeled = pixelize_fn(styled)
-    styled_masked = apply_alpha(pixeled, m_crop.astype(np.float32))
+    styled_masked = apply_alpha(pixeled, m_alpha.astype(np.float32))
 
     if background == "original":
         canvas = image.convert("RGBA")
         canvas.paste(styled_masked, (x0, y0), styled_masked)
+        return canvas
     else:
-        canvas_color = (255, 255, 255, 255) if background == "white" else (0, 0, 0, 0)
-        canvas = Image.new("RGBA", (w, h), canvas_color)
-        canvas.paste(styled_masked, (x0, y0), styled_masked)
+        # 알파 픽셀 기준으로 실제 캐릭터 범위를 구해 가운데 배치
+        alpha = np.array(styled_masked.split()[3])
+        ys_a, xs_a = np.where(alpha > 10)
+        if xs_a.size > 0:
+            ax0, ax1 = int(xs_a.min()), int(xs_a.max())
+        else:
+            ax0, ax1 = 0, styled_masked.width
 
-    return canvas
+        cw, ch = styled_masked.size
+        char_w = ax1 - ax0 + 1
+        pad_h = int(char_w * 0.12)
+        pad_v = int(ch * 0.05)
+
+        canvas_w = char_w + pad_h * 2
+        canvas_h = ch + pad_v * 2
+        canvas_color = (255, 255, 255, 255) if background == "white" else (0, 0, 0, 0)
+        canvas = Image.new("RGBA", (canvas_w, canvas_h), canvas_color)
+        # 캐릭터 bbox의 ax0을 기준으로 pad_h만큼 왼쪽에 배치 → 좌우 대칭
+        paste_x = pad_h - ax0
+        paste_y = pad_v
+        canvas.paste(styled_masked, (paste_x, paste_y), styled_masked)
+        return canvas
 
 
 def _color_transfer(source: Image.Image, target: Image.Image) -> Image.Image:
-    """원본(source) 색감을 타겟(target)에 이식 (LAB 통계 전이)."""
     src = np.array(source.convert("RGB")).astype(np.float32)
     tgt = np.array(target.convert("RGB")).astype(np.float32)
 
@@ -242,7 +270,6 @@ def pixel_art_person_controlnet(
     pixel_target: int = 128,
     palette_size: int = 32,
 ) -> Image.Image:
-    """ControlNet + SD1.5 + LoRA 픽셀아트 변환 후 pixeloe 마무리."""
     config = PixelArtConfig(target_long_edge=pixel_target, palette_size=palette_size)
 
     captured_original: list[Image.Image] = []
@@ -252,40 +279,49 @@ def pixel_art_person_controlnet(
         return stylizer.apply(img)
 
     def pixelize_with_orig_palette(styled: Image.Image) -> Image.Image:
+        import colorsys
         orig = captured_original[0] if captured_original else styled
         orig_resized = orig.resize(styled.size, Image.BILINEAR).convert("RGB")
 
-        # 원본 이미지에서 팔레트 추출
-        q = orig_resized.quantize(colors=config.palette_size, method=Image.Quantize.MEDIANCUT)
+        # 팔레트 추출 전 median blur로 잡색 제거
+        palette_src = orig_resized.filter(ImageFilter.MedianFilter(size=3))
+        q = palette_src.quantize(colors=config.palette_size, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
         raw = q.getpalette()
         orig_palette = np.array(raw[:config.palette_size * 3]).reshape(-1, 3).astype(np.float32)
 
-        # HSV 기반 팔레트 보정: 색조 유지 + 채도 강화 + 어두운 색만 밝기 보정
-        import colorsys
+        # HSV 기반 팔레트 보정: 채도 강화 + 밝기 보정
         boosted = []
         for color in orig_palette:
             r, g, b = color / 255.0
             h, s, v = colorsys.rgb_to_hsv(r, g, b)
-            s = min(1.0, s * 2.2)       # 채도 강화
-            v = min(1.0, v * 1.4 + 0.08) if v < 0.5 else min(1.0, v * 1.1)  # 어두운 색만 밝기 보정
+            s = min(1.0, s * 2.0)
+            v = min(1.0, v * 1.3 + 0.06) if v < 0.5 else min(1.0, v * 1.08)
             r2, g2, b2 = colorsys.hsv_to_rgb(h, s, v)
             boosted.append([r2 * 255, g2 * 255, b2 * 255])
         orig_palette = np.array(boosted, dtype=np.float32)
 
-        # styled 이미지를 pixeloe로 픽셀화
+        # pixeloe 픽셀화 (downscale → palette → nearest upscale 순서)
         pixelized = _pixel_art_pixeloe(styled, config).convert("RGB")
 
         pix_arr = np.array(pixelized).astype(np.float32)
         h, w = pix_arr.shape[:2]
         flat = pix_arr.reshape(-1, 3)
 
-        # 각 픽셀 → 원본 팔레트 최근접 색 매핑
+        # 원본 팔레트 최근접 색 매핑 (디더링 없음)
         dists = np.sum((flat[:, None, :] - orig_palette[None, :, :]) ** 2, axis=2)
         nearest = np.argmin(dists, axis=1)
         remapped = orig_palette[nearest].reshape(h, w, 3).clip(0, 255).astype(np.uint8)
 
         result = Image.fromarray(remapped)
-        result = ImageEnhance.Color(result).enhance(1.2)
+        result = ImageEnhance.Color(result).enhance(1.15)
+
+        # 엣지 오버레이: 윤곽선 강화
+        result_arr = np.array(result).astype(np.float32)
+        edges = _edge_map(result_arr.astype(np.uint8), threshold=0.06)
+        blend = 0.85  # 엣지 위치에 어두운 색을 85% 블렌딩
+        result_arr[edges] = result_arr[edges] * (1 - blend) + np.array([15, 15, 15]) * blend
+        result = Image.fromarray(result_arr.clip(0, 255).astype(np.uint8))
+
         return result.convert("RGBA")
 
     return _person_pipeline(
@@ -307,7 +343,6 @@ def pixel_art_person_anime(
     background: str = "white",
     mask_dilate_px: int = 4,
 ) -> Image.Image:
-    """AnimeGAN2 일러스트 변환 → pixeloe 픽셀아트."""
     if config is None:
         config = ANIME_PIXELART_DEFAULTS
 
@@ -341,7 +376,6 @@ def pixel_art_person_cartoon(
     background: str = "white",
     mask_dilate_px: int = 12,
 ) -> Image.Image:
-    """mask_dilate_px: 마스크 팽창 반경(픽셀). 핸드폰·가방·신발 등 인물 인접 악세사리 포함."""
     if config is None:
         config = PixelArtConfig()
     return _person_pipeline(
@@ -353,3 +387,5 @@ def pixel_art_person_cartoon(
         stylize_fn=stylizer.apply,
         pixelize_fn=lambda img: _pixel_art(img, config),
     )
+
+
