@@ -124,8 +124,8 @@ def _pixelate_sync(content: bytes, params: dict[str, Any]) -> tuple[bytes, dict[
 
     background = _normalize_background(str(params.get("background", "white")))
     style = str(params.get("style", "character"))
-    long_edge = int(params.get("long_edge", 192))
-    palette = int(params.get("palette", 48))
+    long_edge = int(params.get("long_edge", DEFAULT_PIXEL_LONG_EDGE))
+    palette = int(params.get("palette", DEFAULT_PIXEL_PALETTE))
     config = PixelArtConfig(target_long_edge=long_edge, palette_size=palette)
 
     if style == "character":
@@ -303,7 +303,7 @@ async def pixelate_person_async(
         for stale_id, stale in list(_JOBS.items()):
             if (
                 stale["status"] in {"SUCCEEDED", "FAILED", "CANCELLED"}
-                and stale.get("update_ms", 0) + JOB_RETENTION_MS <= now
+                and stale.get("updated_ms", 0) + JOB_RETENTION_MS <= now
                 ): 
                     _JOBS.pop(stale_id, None)
         _JOBS[job_id] = job
